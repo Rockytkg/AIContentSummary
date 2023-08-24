@@ -12,7 +12,7 @@ AIContentSummary 插件具有以下功能：
 
 ## 安装方法
 
-1. 下载插件：[下载地址](https://example.com/download/aicontentsummary)
+1. 下载插件：[下载地址](https://github.com/Rockytkg/AIContentSummary/releases)
 2. 将下载的插件文件解压并上传至 Typecho 插件目录
 3. 登录 Typecho 后台，进入插件管理页面，启用 AIContentSummary 插件
 4. 根据提示配置插件参数
