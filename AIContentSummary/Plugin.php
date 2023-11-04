@@ -85,21 +85,28 @@ class AIContentSummary_Plugin implements Typecho_Plugin_Interface
 
     public static function onFinishPublish($contents, $obj)
     {
-        $title = $contents['title'];
-        $text = $contents['text'];
-        $apiResponse = self::callApi($title, $text);
-
-        // 保存摘要到自定义字段content
         $db = Typecho_Db::get();
-        $rows = $db->fetchRow($db->select()->from('table.fields')->where('cid = ?', $obj->cid)->where('name = ?', 'content'));
-        if ($rows) {
-            $db->query($db->update('table.fields')->rows(array('str_value' => $apiResponse))->where('cid = ?', $obj->cid)->where('name = ?', 'content'));
-        } else {
-            $db->query($db->insert('table.fields')->rows(array('cid' => $obj->cid, 'name' => 'content', 'type' => 'str', 'str_value' => $apiResponse, 'int_value' => 0, 'float_value' => 0)));
+        
+        // 检查 'content' 字段是否存在并获取其值
+        $rows = $db->fetchRow($db->select('str_value')->from('table.fields')->where('cid = ?', $obj->cid)->where('name = ?', 'content'));
+        
+        // 如果 'content' 字段不存在或其值为空，则使用 callApi 生成内容
+        if (!$rows || empty($rows['str_value'])) {
+            $title = $contents['title'];
+            $text = $contents['text'];
+            $apiResponse = self::callApi($title, $text);
+    
+            // 保存到自定义字段 'content'
+            if ($rows) {
+                $db->query($db->update('table.fields')->rows(array('str_value' => $apiResponse))->where('cid = ?', $obj->cid)->where('name = ?', 'content'));
+            } else {
+                $db->query($db->insert('table.fields')->rows(array('cid' => $obj->cid, 'name' => 'content', 'type' => 'str', 'str_value' => $apiResponse, 'int_value' => 0, 'float_value' => 0)));
+            }
         }
-
+    
         return $contents;
     }
+    
 
     private static function callApi($title, $text)
     {
