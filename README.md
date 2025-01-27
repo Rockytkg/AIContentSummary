@@ -1,6 +1,6 @@
 # AIContentSummary
 
-AIContentSummary 是一个用于通过调用AI接口，根据文章内容生成摘要的 Typecho 插件。本文将介绍这款插件的功能和使用方法，并提供插件的下载地址。欢迎访问作者博客了解更多信息：[作者博客](https://letanml.xyz/)
+AIContentSummary 是一个用于通过调用AI接口，根据文章内容生成摘要的 Typecho 插件。
 
 ## 功能介绍
 

@@ -1,80 +1,114 @@
 <?php
 
+namespace TypechoPlugin\AIContentSummary;
+
+use Typecho\Plugin\Exception;
+use Typecho\Plugin\PluginInterface;
+use Typecho\Widget\Helper\Form;
+use Typecho\Widget\Helper\Form\Element\Text;
+use Typecho\Db;
+use Widget\Base\Contents;
+use Widget\Contents\Post\Edit;
+use Widget\Options;
+
+if (!defined('__TYPECHO_ROOT_DIR__')) {
+    exit;
+}
+
 /**
- * AIContentSummary 是一个用于通过调用AI接口，根据文章内容生成摘要的 Typecho 插件
+ * AIContentSummary 是一个用于通过 AI 生成文章摘要的 Typecho 插件
  *
  * @package AIContentSummary
- * @author Joinliu
- * @version 1.2
- * @link https://letanml.xyz
+ * @author Rockytkg
+ * @version 1.3
+ * @link https://github.com/Rockytkg/AIContentSummary
  */
-class AIContentSummary_Plugin implements Typecho_Plugin_Interface
+class Plugin implements PluginInterface
 {
-    public static function activate()
+    /**
+     * 激活插件方法，如果激活失败，直接抛出异常
+     *
+     * 注册自定义摘要生成方法和文章发布完成时的回调
+     */
+    public static function activate(): void
     {
-        Typecho_Plugin::factory('Widget_Abstract_Contents')->excerptEx = array('AIContentSummary_Plugin', 'customExcerpt');
-        Typecho_Plugin::factory('Widget_Contents_Post_Edit')->finishPublish = array('AIContentSummary_Plugin', 'onFinishPublish');
+        // 注册自定义摘要生成方法
+        \Typecho\Plugin::factory('Widget\Base\Contents')->excerptEx = __CLASS__ . '::customExcerpt';
+        // 注册文章发布完成时的回调
+        \Typecho\Plugin::factory('Widget\Contents\Post\Edit')->finishPublish = __CLASS__ . '::onFinishPublish';
+        // 注册文章删除时的回调
+        \Typecho\Plugin::factory('Widget\Contents\Post\Edit')->delete = __CLASS__ . '::onDelete';
     }
 
+    /**
+     * 禁用插件方法，如果禁用失败，直接抛出异常
+     *
+     * 插件禁用时无需额外操作
+     */
     public static function deactivate()
     {
     }
 
-    public static function config(Typecho_Widget_Helper_Form $form)
+    /**
+     * 获取插件配置面板
+     *
+     * @param Form $form 配置面板对象
+     */
+    public static function config(Form $form): void
     {
-        // 添加输入框：模型名
-        $modelName = new Typecho_Widget_Helper_Form_Element_Text(
-            'modelName',
-            NULL,
-            'gpt-3.5-turbo-16k',
-            _t('输入总结内容使用的模型名'),
-            _t('请输入模型名，默认为gpt-3.5-turbo-16k')
-        );
-        $form->addInput($modelName);
+        /** 模型名称 */
+        $modelName = new Text('modelName', null, 'gpt-3.5-turbo-16k', _t('模型名称'), _t('用于生成摘要的 AI 模型名称'));
+        $form->addInput($modelName->addRule('required', _t('模型名称不能为空')));
 
-        // 添加输入框：key值
-        $keyValue = new Typecho_Widget_Helper_Form_Element_Text(
-            'keyValue',
-            NULL,
-            NULL,
-            _t('API KEY'),
-            _t('输入调用用API的key')
-        );
-        $form->addInput($keyValue);
+        /** API Key */
+        $keyValue = new Text('keyValue', null, null, _t('API Key'), _t('用于调用 API 的密钥'));
+        $form->addInput($keyValue->addRule('required', _t('API Key 不能为空')));
 
-        // 添加输入框：API地址
-        $apiUrl = new Typecho_Widget_Helper_Form_Element_Text(
-            'apiUrl',
-            NULL,
-            NULL,
-            _t('输入地址'),
-            _t('请输入API地址，不要省略（https://）或（http://）不要带有（/v1）')
-        );
-        $form->addInput($apiUrl);
+        /** API 地址 */
+        $apiUrl = new Text('apiUrl', null, null, _t('API 地址'), _t('API 的完整地址，例如 https://api.example.com/v1'));
+        $form->addInput($apiUrl->addRule('required', _t('API 地址不能为空')));
 
-        // 添加输入框：摘要最大长度
-        $maxLength = new Typecho_Widget_Helper_Form_Element_Text(
-            'maxLength',
-            NULL,
-            '100',
-            _t('摘要最大长度'),
-            _t('请输入输出摘要的最大文字数量。')
-        );
-        $form->addInput($maxLength);
+        /** 摘要最大长度 */
+        $maxLength = new Text('maxLength', null, '100', _t('摘要最大长度'), _t('生成摘要的最大字符数, 无法准确控制'));
+        $form->addInput($maxLength->addRule('isInteger', _t('请输入一个整数'))->addRule('required', _t('摘要长度不能为空')));
+
+        /** 自定义字段名称 */
+        $fieldName = new Text('fieldName', null, 'ai_summary', _t('自定义字段名称'), _t('用于保存生成的摘要的自定义字段名称，默认为 ai_summary'));
+        $form->addInput($fieldName->addRule('required', _t('字段名称不能为空')));
     }
 
-    public static function personalConfig(Typecho_Widget_Helper_Form $form)
+    /**
+     * 个人用户的配置面板
+     *
+     * @param Form $form 配置面板对象
+     */
+    public static function personalConfig(Form $form)
     {
+        // 无需个人配置
     }
 
-    public static function customExcerpt($excerpt, $widget)
+    /**
+     * 自定义摘要生成方法
+     *
+     * 根据文章内容生成摘要，如果自定义字段中有内容，则优先使用自定义字段的内容
+     *
+     * @param string $excerpt 原始摘要
+     * @param Contents $widget 文章内容对象
+     * @return string 生成的摘要
+     * @throws Exception
+     */
+    public static function customExcerpt(string $excerpt, Contents $widget): string
     {
-        $customContent = $widget->fields->content;
-        $maxLength = Typecho_Widget::widget('Widget_Options')->plugin('AIContentSummary')->maxLength;
+        $options = Options::alloc()->plugin('AIContentSummary');
+        $fieldName = $options->fieldName ?? 'ai_summary'; // 默认字段名称为 ai_summary
+        $customContent = $widget->fields->$fieldName ?? null; // 获取自定义字段的内容
+        $maxLength = $options->maxLength;
 
+        // 如果自定义字段中有内容，则使用该内容作为摘要
         if (!empty($customContent)) {
             $excerpt = $customContent;
 
+            // 如果摘要长度超过最大长度，则截断并添加省略号
             if (mb_strlen($excerpt) > $maxLength) {
                 $excerpt = mb_substr($excerpt, 0, $maxLength) . '...';
             }
@@ -83,67 +117,122 @@ class AIContentSummary_Plugin implements Typecho_Plugin_Interface
         return $excerpt;
     }
 
-    public static function onFinishPublish($contents, $obj)
+    /**
+     * 文章发布完成时的回调
+     *
+     * 在文章发布完成后，调用 AI API 生成摘要并保存到自定义字段中
+     *
+     * @param array $contents 文章内容
+     * @param Edit $obj 文章编辑对象
+     * @return array 文章内容
+     * @throws Db\Exception|Exception
+     */
+    public static function onFinishPublish(array $contents, Edit $obj): array
     {
-        $db = Typecho_Db::get();
-        
-        // 检查 'content' 字段是否存在并获取其值
-        $rows = $db->fetchRow($db->select('str_value')->from('table.fields')->where('cid = ?', $obj->cid)->where('name = ?', 'content'));
-        
-        // 如果 'content' 字段不存在或其值为空，则使用 callApi 生成内容
+        $db = Db::get();
+        $options = Options::alloc()->plugin('AIContentSummary');
+        $fieldName = $options->fieldName ?? 'ai_summary'; // 默认字段名称为 ai_summary
+
+        // 检查是否已存在自定义字段
+        $rows = $db->fetchRow($db->select('str_value')
+            ->from('table.fields')
+            ->where('cid = ?', $obj->cid)
+            ->where('name = ?', $fieldName));
+
+        // 如果不存在或为空，调用 API 生成摘要
         if (!$rows || empty($rows['str_value'])) {
             $title = $contents['title'];
             $text = $contents['text'];
             $apiResponse = self::callApi($title, $text);
-    
-            // 保存到自定义字段 'content'
+
+            // 保存生成的摘要到自定义字段
             if ($rows) {
-                $db->query($db->update('table.fields')->rows(array('str_value' => $apiResponse))->where('cid = ?', $obj->cid)->where('name = ?', 'content'));
+                // 更新已存在的字段
+                $db->query($db->update('table.fields')
+                    ->rows(['value' => $apiResponse])
+                    ->where('cid = ?', $obj->cid)
+                    ->where('name = ?', $fieldName));
             } else {
-                $db->query($db->insert('table.fields')->rows(array('cid' => $obj->cid, 'name' => 'content', 'type' => 'str', 'str_value' => $apiResponse, 'int_value' => 0, 'float_value' => 0)));
+                // 插入新字段
+                $db->query($db->insert('table.fields')
+                    ->rows([
+                        'cid' => $obj->cid,
+                        'name' => $fieldName,
+                        'type' => 'str',
+                        'str_value' => $apiResponse,
+                        'int_value' => 0,
+                        'float_value' => 0
+                    ]));
             }
         }
-    
+
         return $contents;
     }
-    
 
-    private static function callApi($title, $text)
+    /**
+     * 文章删除时的回调
+     *
+     * 在文章删除时，删除与该文章关联的摘要字段
+     *
+     * @param int $cid 文章 ID
+     * @throws Db\Exception|Exception
+     */
+    public static function onDelete(int $cid): void
     {
-        // 获取用户填入的值
-        $options = Typecho_Widget::widget('Widget_Options')->plugin('AIContentSummary');
+        $db = Db::get();
+        $options = Options::alloc()->plugin('AIContentSummary');
+        $fieldName = $options->fieldName ?? 'ai_summary'; // 默认字段名称为 ai_summary
+
+        // 删除与该文章关联的摘要字段
+        $db->query($db->delete('table.fields')
+            ->where('cid = ?', $cid)
+            ->where('name = ?', $fieldName));
+    }
+
+    /**
+     * 调用 AI API 生成摘要
+     *
+     * 通过调用 AI API 生成文章摘要，支持重试机制
+     *
+     * @param string $text 文章内容
+     * @return string 生成的摘要
+     * @throws Exception
+     */
+    private static function callApi(string $text): string
+    {
+        $options = Options::alloc()->plugin('AIContentSummary');
         $modelName = $options->modelName;
         $keyValue = $options->keyValue;
-        $apiUrl = rtrim($options->apiUrl, '/') . '/v1/chat/completions';
+        $apiUrl = rtrim($options->apiUrl, '/') . '/chat/completions';
         $maxLength = $options->maxLength;
 
+        // 设置请求头
         $headers = [
             'Content-Type: application/json',
             'Authorization: Bearer ' . $keyValue
         ];
 
-        $title = addslashes($title);
-        $prompt = addslashes($text);
-
-        $data = array(
+        // 构造请求数据
+        $data = [
             "model" => $modelName,
-            "messages" => array(
-                array(
+            "messages" => [
+                [
                     "role" => "system",
-                    "content" => "请你扮演一个文本摘要生成器，下面是一篇关于 ’{$title}‘ 的文章，请你根据文章内容生成 {$maxLength} 字左右的摘要，除了你生成的的摘要内容，请不要输出其他任何无关内容"
-                ),
-                array(
+                    "content" => "请对以下文章内容进行概括并生成摘要，摘要不要超过 $maxLength 字。"
+                ],
+                [
                     "role" => "user",
-                    "content" => $prompt
-                )
-            ),
+                    "content" => addslashes($text)
+                ]
+            ],
             "temperature" => 0
-        );
+        ];
 
-        $maxRetries = 5;
-        $retries = 0;
-        $waitTime = 2;
+        $maxRetries = 5; // 最大重试次数
+        $retries = 0; // 当前重试次数
+        $waitTime = 2; // 初始等待时间（秒）
 
+        // 重试机制
         while ($retries < $maxRetries) {
             try {
                 $ch = curl_init($apiUrl);
@@ -151,30 +240,36 @@ class AIContentSummary_Plugin implements Typecho_Plugin_Interface
                 curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
                 curl_setopt($ch, CURLOPT_POST, true);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data, JSON_UNESCAPED_UNICODE));
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 
                 $response = curl_exec($ch);
 
+                // 检查是否有错误
                 if (curl_errno($ch)) {
-                    throw new Exception(curl_error($ch), curl_errno($ch));
+                    throw new \Exception(curl_error($ch), curl_errno($ch));
                 }
 
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
                 curl_close($ch);
 
+                // 如果请求成功，返回生成的摘要
                 if ($httpCode == 200) {
                     $decodedResponse = json_decode($response, true);
                     return trim($decodedResponse['choices'][0]['message']['content']);
                 }
 
-                throw new Exception("HTTP status code: " . $httpCode);
-            } catch (Exception $e) {
+                // 如果请求失败，抛出异常
+                throw new \Exception("HTTP 状态码: " . $httpCode);
+            } catch (\Exception $e) {
                 $retries++;
-                sleep($waitTime);
-                $waitTime *= 2;
+                sleep($waitTime); // 等待一段时间后重试
+                $waitTime *= 2; // 每次重试等待时间翻倍
             }
         }
 
+        // 如果重试次数用尽，返回空字符串
         return "";
     }
 }
