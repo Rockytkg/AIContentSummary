@@ -141,9 +141,8 @@ class Plugin implements PluginInterface
 
         // 如果不存在或为空，调用 API 生成摘要
         if (!$rows || empty($rows['str_value'])) {
-            $title = $contents['title'];
             $text = $contents['text'];
-            $apiResponse = self::callApi($title, $text);
+            $apiResponse = self::callApi($text);
 
             // 保存生成的摘要到自定义字段
             if ($rows) {
