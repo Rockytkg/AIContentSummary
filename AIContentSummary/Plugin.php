@@ -340,8 +340,12 @@ class Plugin implements PluginInterface
     }
 
     /**
+     * 根据插件配置在文章头部插入AI摘要
      *
-     *
+     * @param string $content 原始文章内容（带标签的HTML字符串）
+     * @param Contents $widget 文章部件对象，包含自定义字段数据
+     * @return string 处理后的文章内容（可能包含前置摘要的HTML字符串）
+     * @throws Exception
      */
     public static function customContent(string $content, Contents $widget): string
     {
