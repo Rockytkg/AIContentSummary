@@ -2,164 +2,94 @@
 
 namespace TypechoPlugin\AIContentSummary;
 
-use Typecho\Widget;
-use Typecho\Db;
 use Typecho\Widget\Exception;
 use Widget\ActionInterface;
+use Widget\Base;
+
+if (!defined('__TYPECHO_ROOT_DIR__')) {
+    exit;
+}
 
 /**
- * 摘要生成与管理控制器
- *
- * @package AIContentSummary
+ * 摘要管理动作入口。
  */
-class Action extends Widget implements ActionInterface
+final class Action extends Base implements ActionInterface
 {
     /**
-     * 前置校验（权限+请求方法）
+     * 处理摘要管理请求。
      *
-     * @throws Exception|Db\Exception
+     * 仅接受管理员 POST 请求，并统一返回 JSON 结构给后台模板页消费。
      */
-    private function preCheck()
+    public function action(): void
     {
-        // 统一权限校验
-        if (!Widget::widget('Widget\User')->pass('administrator')) {
-            throw new Exception(_t('对不起,只有管理员才能进行此操作'), 403);
-        }
+        $status = 200;
+        $response = ['success' => true];
 
-        // 统一请求方法校验
-        if (!$this->request->isPost()) {
-            throw new Exception(_t('请求方式错误'), 405);
-        }
-    }
-
-    /**
-     * 主入口方法
-     */
-    public function action()
-    {
         try {
-            $this->preCheck();
+            $this->user->pass('administrator');
+            $this->security->protect();
 
-            $operation = $this->request->get('do');
-            switch ($operation) {
-                case 'generate':
-                    $this->generateSummary();
-                    break;
-                case 'save':
-                    $this->saveSummary();
-                    break;
-                default:
-                    throw new Exception(_t('未知的操作类型'), 400);
+            if (!$this->request->isPost()) {
+                throw new Exception(_t('请求方式错误'), 405);
             }
-        } catch (\Exception $e) {
-            $this->response->setStatus($e->getCode() ?: 500);
-            $this->response->throwJson([
+
+            $cid = $this->request->filter('int')->get('cid');
+            if ($cid < 1) {
+                throw new Exception(_t('无效的文章 ID'), 400);
+            }
+
+            $response += match ((string) $this->request->get('do')) {
+                'generate' => $this->generate($cid),
+                'save' => $this->save($cid),
+                default => throw new Exception(_t('未知操作'), 400),
+            };
+        } catch (\Throwable $exception) {
+            $status = (int) $exception->getCode();
+            $response = [
                 'success' => false,
-                'message' => $e->getMessage()
-            ]);
+                'message' => $exception->getMessage() ?: _t('请求失败'),
+            ];
         }
+
+        // 兜底修正异常码，避免非标准 code 影响前端错误处理。
+        if (!$response['success'] && ($status < 400 || $status >= 600)) {
+            $status = 500;
+        }
+
+        $this->response
+            ->setStatus($status)
+            ->setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
+            ->throwJson($response);
     }
 
     /**
-     * 生成文章摘要
+     * 生成并返回摘要响应。
      *
-     * @throws Db\Exception
-     * @throws Exception
+     * @return array{message:string,data:array{cid:int,summary:string,length:int,hasSummary:bool}}
      */
-    private function generateSummary()
+    private function generate(int $cid): array
     {
-        $data = $this->parseJsonBody();
-        $cid = $data['cid'] ?? null;
-
-        if (empty($cid) || !is_numeric($cid)) {
-            throw new Exception(_t('无效的文章ID'), 400);
-        }
-
-        $content = $this->getPostContent((int)$cid);
-        try {
-            $summary = Plugin::callApi($content);
-            Plugin::saveSummary((int)$cid, $summary);
-        } catch (\Exception $e) {
-            throw new Exception($e->getMessage(), 500);
-        }
-
-        $this->response->throwJson([
-            'success' => true,
-            'summary' => $summary,
-            'message' => _t('生成成功')
-        ]);
+        return [
+            'message' => _t('摘要生成成功'),
+            // 统一复用插件主逻辑，保持编辑页自动生成与后台手动生成行为一致。
+            'data' => Plugin::generateForPost($cid),
+        ];
     }
 
     /**
-     * 手动保存摘要
+     * 保存并返回摘要响应。
      *
-     * @throws Exception|Db\Exception
+     * @return array{message:string,data:array{cid:int,summary:string,length:int,hasSummary:bool}}
      */
-    private function saveSummary()
+    private function save(int $cid): array
     {
-        $data = $this->parseJsonBody();
-        $cid = $data['cid'] ?? null;
-
-        if (empty($cid) || !is_numeric($cid)) {
-            throw new Exception(_t('无效的文章ID'), 400);
-        }
-
-        if (!isset($data['summary'])) {
-            throw new Exception(_t('缺少摘要内容'), 400);
-        }
-
-        Plugin::saveSummary((int)$cid, trim($data['summary']));
-
-        $this->response->throwJson([
-            'success' => true,
-            'message' => _t('保存成功')
-        ]);
-    }
-
-    /**
-     * 解析并验证 JSON 请求体
-     *
-     * @return array
-     * @throws Exception
-     */
-    private function parseJsonBody(): array
-    {
-        $rawBody = file_get_contents('php://input');
-        if (empty($rawBody)) {
-            throw new Exception(_t('请求体为空'), 400);
-        }
-
-        $data = json_decode($rawBody, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new Exception(_t('JSON解析失败'), 400);
-        }
-
-        return $data;
-    }
-
-    /**
-     * 获取文章内容
-     *
-     * @param int $cid 文章ID
-     * @return string
-     * @throws Db\Exception
-     * @throws Exception
-     */
-    private function getPostContent(int $cid): string
-    {
-        $db = Db::get();
-        $post = $db->fetchRow($db->select('text')
-            ->from('table.contents')
-            ->where('cid = ?', $cid)
-            ->where('type = ?', 'post')
-            ->where('status = ?', 'publish')
-            ->limit(1)
-        );
-
-        if (empty($post)) {
-            throw new Exception(_t('文章不存在或未发布'), 404);
-        }
-
-        return (string)$post['text'];
+        return [
+            'message' => _t('摘要保存成功'),
+            // 保存与清空都走同一个入口，由插件主逻辑判断摘要内容是否为空。
+            'data' => Plugin::saveManual(
+                $cid,
+                (string) $this->request->get('summary', '')
+            ),
+        ];
     }
 }

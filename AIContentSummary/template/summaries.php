@@ -1,483 +1,469 @@
 <?php
-// 引入必要的文件
-require 'header.php';
-require 'menu.php';
 
-// 初始化组件
-$stat = \Widget\Stat::alloc();
+use Typecho\Common;
+use Typecho\Cookie;
+use TypechoPlugin\AIContentSummary\Plugin;
+
+if (!defined('__TYPECHO_ROOT_DIR__')) {
+    exit;
+}
+
+$user->pass('administrator');
+
+include 'header.php';
+include 'menu.php';
+
 $posts = \Widget\Contents\Post\Admin::alloc();
-$isAllPosts = ($request->get('__typecho_all_posts') === 'on' || \Typecho\Cookie::get('__typecho_all_posts') === 'on');
-$fieldName = Widget\Options::alloc()->plugin('AIContentSummary')->fieldName;
-// 主页面结构
+$settings = \Widget\Options::alloc()->plugin(Plugin::NAME);
+$fieldName = $settings->fieldName;
+$isAllPosts = $request->get('__typecho_all_posts') === 'on' || Cookie::get('__typecho_all_posts') === 'on';
+$panelBase = 'extending.php?panel=AIContentSummary/template/summaries.php';
+$actionBase = $security->getIndex('/action/summaries');
+
+$statusTabs = [
+    ['value' => 'all', 'label' => _t('可用')],
+    ['value' => 'waiting', 'label' => _t('待审核')],
+    ['value' => 'draft', 'label' => _t('草稿')],
+];
+
+$currentStatus = (string) $request->get('status', 'all');
+$currentStatus = in_array($currentStatus, ['all', 'waiting', 'draft'], true) ? $currentStatus : 'all';
+
+// 统一组装当前面板链接，避免切换筛选条件时手写 query。
+$buildPanelUrl = static function (array $query = []) use ($options, $panelBase): string {
+    $query = array_filter($query, static fn ($value): bool => $value !== null && $value !== '');
+    $suffix = $query ? '&' . http_build_query($query) : '';
+
+    return $options->adminUrl($panelBase . $suffix, true);
+};
 ?>
 
 <style>
-    /* 编辑框样式 */
-    .summary-edit {
+    .summary-cell {
+        min-width: 320px;
+    }
+
+    .summary-display {
+        white-space: pre-wrap;
+        word-break: break-word;
+        cursor: pointer;
+    }
+
+    .summary-editing .summary-display {
+        display: none;
+    }
+
+    .summary-editor,
+    .summary-actions {
+        display: none;
+    }
+
+    .summary-editing .summary-editor,
+    .summary-editing .summary-actions {
+        display: block;
+    }
+
+    .summary-editor textarea {
         width: 100%;
-        height: 60px;
-        padding: 5px;
-        border: 1px solid #ddd;
-        border-radius: 3px;
-        font-size: 14px;
+        min-height: 96px;
         box-sizing: border-box;
+        resize: vertical;
     }
 
-    .disabled-row input[type="checkbox"] {
-        pointer-events: none;
+    .summary-actions {
+        margin-top: 8px;
     }
 
-    .disabled-row {
-        opacity: 0.6;
-        pointer-events: none;
-        transition: opacity 0.3s ease;
-        background-color: #f9f9f9;
+    .summary-actions .btn {
+        margin-right: 8px;
     }
 
-    [class^="summary-"] {
-        transition: display 0.2s ease;
+    .summary-meta {
+        margin-top: 8px;
+        color: #999;
+        font-size: 12px;
+    }
+
+    .summary-busy {
+        opacity: .65;
     }
 </style>
 
-<div class="main">
+<main class="main">
     <div class="body container">
-        <?php require 'page-title.php'; ?>
+        <?php include 'page-title.php'; ?>
         <div class="row typecho-page-main" role="main">
             <div class="col-mb-12 typecho-list">
-                <div class="clearfix">
-                    <?php if ($user->pass('editor', true) && !isset($request->uid)): ?>
-                        <ul class="typecho-option-tabs right">
-                            <li class="<?php echo $isAllPosts ? 'current' : ''; ?>">
-                                <a href="<?php echo $request->makeUriByRequest('__typecho_all_posts=on&page=1'); ?>">所有</a>
+                <div class="typecho-list-operate">
+                    <ul class="typecho-option-tabs">
+                        <?php foreach ($statusTabs as $tab): ?>
+                            <?php
+                            $isCurrent = $currentStatus === $tab['value'];
+                            $statusValue = $tab['value'] === 'all' ? null : $tab['value'];
+                            ?>
+                            <li<?php if ($isCurrent): ?> class="current"<?php endif; ?>>
+                                <a href="<?php echo htmlspecialchars($buildPanelUrl([
+                                    'status' => $statusValue,
+                                    'uid' => isset($request->uid) ? $request->filter('encode')->uid : null,
+                                ]), ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($tab['label'], ENT_QUOTES, 'UTF-8'); ?></a>
                             </li>
-                            <li class="<?php echo !$isAllPosts ? 'current' : ''; ?>">
-                                <a href="<?php echo $request->makeUriByRequest('__typecho_all_posts=off&page=1'); ?>">我的</a>
+                        <?php endforeach; ?>
+                    </ul>
+
+                    <?php if (!isset($request->uid)): ?>
+                        <ul class="typecho-option-tabs">
+                            <li<?php if ($isAllPosts): ?> class="current"<?php endif; ?>>
+                                <a href="<?php echo htmlspecialchars($request->makeUriByRequest('__typecho_all_posts=on&page=1'), ENT_QUOTES, 'UTF-8'); ?>"><?php _e('所有'); ?></a>
+                            </li>
+                            <li<?php if (!$isAllPosts): ?> class="current"<?php endif; ?>>
+                                <a href="<?php echo htmlspecialchars($request->makeUriByRequest('__typecho_all_posts=off&page=1'), ENT_QUOTES, 'UTF-8'); ?>"><?php _e('我的'); ?></a>
                             </li>
                         </ul>
                     <?php endif; ?>
-                    <ul class="typecho-option-tabs">
-                        <?php
-                        $statusTabs = [
-                            ['status' => 'all', 'label' => '可用'],
-                            ['status' => 'waiting', 'label' => '待审核'],
-                            ['status' => 'draft', 'label' => '草稿']
-                        ];
-                        foreach ($statusTabs as $tab) {
-                            $currentStatus = $request->get('status');
-                            $isCurrent = (!isset($currentStatus) && $tab['status'] === 'all') || $currentStatus === $tab['status'];
-                            ?>
-                            <li class="<?php echo $isCurrent ? 'current' : ''; ?>">
-                                <a href="<?php
-                                echo $options->adminUrl('extending.php?panel=AIContentSummary/template/summaries.php&status=' . $tab['status']
-                                    . (isset($request->uid) ? '&uid=' . $request->filter('encode')->uid : ''));
-                                ?>"><?php echo $tab['label']; ?></a>
-                            </li>
-                        <?php } ?>
-                    </ul>
                 </div>
 
-                <div class="typecho-list-operate clearfix">
-                    <form method="get">
-                        <div class="operate">
-                            <label><input type="checkbox" class="typecho-table-select-all"/></label>
-                            <div class="btn-group btn-drop">
-                                <button class="btn dropdown-toggle btn-s" type="button">选中项 <i
-                                        class="i-caret-down"></i></button>
-                                <ul class="dropdown-menu">
-                                    <?php if ($user->pass('editor', true)): ?>
-                                        <li>
-                                            <a href="javascript:void(0);" id="generate-summary-batch"
-                                               lang="你确认为这些文章生成摘要吗?">生成摘要</a>
-                                        </li>
-                                    <?php endif; ?>
-                                </ul>
-                            </div>
+                <form method="get" class="typecho-list-operate">
+                    <div class="operate">
+                        <label><i class="sr-only"><?php _e('全选'); ?></i><input type="checkbox" class="typecho-table-select-all"/></label>
+                        <div class="btn-group btn-drop">
+                            <button class="btn dropdown-toggle btn-s" type="button"><?php _e('选中项'); ?> <i class="i-caret-down"></i></button>
+                            <ul class="dropdown-menu">
+                                <li><a href="#" class="js-generate-summary-batch"><?php _e('生成摘要'); ?></a></li>
+                            </ul>
                         </div>
-                        <div class="search" role="search">
-                            <?php if ($request->keywords || $request->category): ?>
-                                <a href="<?php
-                                $url = $options->adminUrl('extending.php?panel=AIContentSummary/template/summaries.php');
-                                $queryParams = [];
-                                if ($request->status) {
-                                    $queryParams[] = 'status=' . $request->filter('encode')->status;
-                                }
-                                if (isset($request->uid)) {
-                                    $queryParams[] = 'uid=' . $request->filter('encode')->uid;
-                                }
-                                $url . ($queryParams ? '&' . implode('&', $queryParams) : '');
-                                ?>">&laquo; 取消筛选</a>
-                            <?php endif; ?>
-                            <input type="text" class="text-s" placeholder="请输入关键字"
-                                   value="<?php echo $request->filter('html')->keywords; ?>" name="keywords"/>
-                            <select name="category">
-                                <option value="">所有分类</option>
-                                <?php \Widget\Metas\Category\Rows::alloc()->to($category); ?>
-                                <?php while ($category->next()): ?>
-                                    <option
-                                        value="<?php echo $category->mid(); ?>" <?php echo ($request->get('category') == $category->mid) ? 'selected' : ''; ?>><?php echo $category->name(); ?></option>
-                                <?php endwhile; ?>
-                            </select>
-                            <button type="submit" class="btn btn-s">筛选</button>
-                            <input type="hidden" name="panel" value="AIContentSummary/template/summaries.php"/>
-                            <?php if (isset($request->uid)): ?>
-                                <input type="hidden" name="uid" value="<?php echo $request->filter('html')->uid; ?>"/>
-                            <?php endif; ?>
-                            <?php if ($request->status): ?>
-                                <input type="hidden" name="status"
-                                       value="<?php echo $request->filter('html')->status; ?>"/>
-                            <?php endif; ?>
-                        </div>
-                    </form>
-                </div>
+                    </div>
+                    <div class="search" role="search">
+                        <?php if ($request->keywords || $request->category): ?>
+                            <a href="<?php echo htmlspecialchars($buildPanelUrl([
+                                'status' => $currentStatus === 'all' ? null : $currentStatus,
+                                'uid' => isset($request->uid) ? $request->filter('encode')->uid : null,
+                            ]), ENT_QUOTES, 'UTF-8'); ?>"><?php _e('&laquo; 取消筛选'); ?></a>
+                        <?php endif; ?>
+                        <input type="text" class="text-s" placeholder="<?php _e('请输入关键字'); ?>" value="<?php echo htmlspecialchars((string) $request->filter('html')->keywords, ENT_QUOTES, 'UTF-8'); ?>" name="keywords"/>
+                        <select name="category">
+                            <option value=""><?php _e('所有分类'); ?></option>
+                            <?php \Widget\Metas\Category\Rows::alloc()->to($category); ?>
+                            <?php while ($category->next()): ?>
+                                <option value="<?php $category->mid(); ?>"<?php if ($request->get('category') == $category->mid): ?> selected="true"<?php endif; ?>><?php $category->name(); ?></option>
+                            <?php endwhile; ?>
+                        </select>
+                        <button type="submit" class="btn btn-s"><?php _e('筛选'); ?></button>
+                        <input type="hidden" name="panel" value="AIContentSummary/template/summaries.php"/>
+                        <?php if (isset($request->uid)): ?>
+                            <input type="hidden" name="uid" value="<?php echo htmlspecialchars((string) $request->filter('html')->uid, ENT_QUOTES, 'UTF-8'); ?>"/>
+                        <?php endif; ?>
+                        <?php if ($currentStatus !== 'all'): ?>
+                            <input type="hidden" name="status" value="<?php echo htmlspecialchars($currentStatus, ENT_QUOTES, 'UTF-8'); ?>"/>
+                        <?php endif; ?>
+                    </div>
+                </form>
 
-                <div class="typecho-table-wrap">
+                <form method="post" class="operate-form">
                     <table class="typecho-list-table">
                         <colgroup>
-                            <col width="20" class="kit-hidden-mb"/>
-                            <col width="25%"/>
-                            <col width="" class="kit-hidden-mb"/>
-                            <col width="12%" class="kit-hidden-mb"/>
-                            <col width="12%" class="kit-hidden-mb"/>
-                            <col width="12%"/>
+                            <col width="3%" class="kit-hidden-mb"/>
+                            <col width="28%"/>
+                            <col width=""/>
+                            <col width="14%"/>
                         </colgroup>
                         <thead>
                         <tr>
                             <th class="kit-hidden-mb"></th>
-                            <th>标题</th>
-                            <th class="kit-hidden-mb">摘要</th>
-                            <th class="kit-hidden-mb">摘要字数</th>
-                            <th class="kit-hidden-mb">作者</th>
-                            <th>操作</th>
+                            <th><?php _e('标题'); ?></th>
+                            <th><?php _e('摘要'); ?></th>
+                            <th><?php _e('操作'); ?></th>
                         </tr>
                         </thead>
                         <tbody>
                         <?php if ($posts->have()): ?>
                             <?php while ($posts->next()): ?>
-                                <tr id="post-<?php $posts->theId(); ?>">
-                                    <td class="kit-hidden-mb"><input type="checkbox" value="<?php $posts->cid(); ?>"
-                                                                     name="cid[]"/></td>
+                                <?php
+                                $summary = trim((string) ($posts->fields->{$fieldName} ?? ''));
+                                $title = (string) $posts->title;
+                                $summaryLength = Common::strLen($summary);
+                                ?>
+                                <tr id="post-<?php $posts->cid(); ?>" data-cid="<?php $posts->cid(); ?>">
+                                    <td class="kit-hidden-mb"><input type="checkbox" value="<?php $posts->cid(); ?>" name="cid[]"/></td>
                                     <td>
                                         <a href="<?php $options->adminUrl('write-post.php?cid=' . $posts->cid); ?>"><?php $posts->title(); ?></a>
-                                        <a href="<?php $options->adminUrl('write-post.php?cid=' . $posts->cid); ?>"
-                                           title="编辑 <?php echo htmlspecialchars($posts->title); ?>"><i
-                                                class="i-edit"></i></a>
-                                    </td>
-                                    <td class="kit-hidden-mb summary-cell">
-                                            <span
-                                                class="summary-text"><?php echo !empty($posts->fields->{$fieldName}) ? $posts->fields->{$fieldName} : '暂无摘要'; ?></span>
-                                        <textarea class="summary-edit" style="display:none;"
-                                                  placeholder="请输入摘要..."><?php echo $posts->fields->{$fieldName} ?? ''; ?></textarea>
-                                        <div class="summary-buttons" style="display:none;">
-                                            <button type="button" class="btn btn-primary save-summary">保存</button>
-                                            <button type="button" class="btn btn-cancel cancel-summary">取消
-                                            </button>
-                                        </div>
+                                        <?php if ('post_draft' === $posts->type): ?>
+                                            <em class="status"><?php _e('草稿'); ?></em>
+                                        <?php elseif ($posts->revision): ?>
+                                            <em class="status"><?php _e('有修订版'); ?></em>
+                                        <?php endif; ?>
+                                        <?php if ('waiting' === $posts->status): ?>
+                                            <em class="status"><?php _e('待审核'); ?></em>
+                                        <?php elseif ('hidden' === $posts->status): ?>
+                                            <em class="status"><?php _e('隐藏'); ?></em>
+                                        <?php elseif ('private' === $posts->status): ?>
+                                            <em class="status"><?php _e('私密'); ?></em>
+                                        <?php elseif ($posts->password): ?>
+                                            <em class="status"><?php _e('密码保护'); ?></em>
+                                        <?php endif; ?>
+                                        <a href="<?php $options->adminUrl('write-post.php?cid=' . $posts->cid); ?>" title="<?php _e('编辑 %s', htmlspecialchars($title, ENT_QUOTES, 'UTF-8')); ?>"><i class="i-edit"></i></a>
                                     </td>
                                     <td class="kit-hidden-mb">
-                                        <span><?php echo mb_strlen($posts->fields->{$fieldName} ?? ''); ?></span>
-                                    </td>
-                                    <td class="kit-hidden-mb"><a
-                                            href="<?php $options->adminUrl('extending.php?panel=AIContentSummary/template/summaries.php&__typecho_all_posts=off&uid=' . $posts->author->uid); ?>"><?php $posts->author(); ?></a>
+                                        <div class="summary-cell" data-summary="<?php echo htmlspecialchars($summary, ENT_QUOTES, 'UTF-8'); ?>">
+                                            <div class="summary-display"><?php echo htmlspecialchars($summary !== '' ? $summary : _t('暂无摘要，点击此处编辑'), ENT_QUOTES, 'UTF-8'); ?></div>
+                                            <div class="summary-editor">
+                                                <textarea><?php echo htmlspecialchars($summary, ENT_QUOTES, 'UTF-8'); ?></textarea>
+                                            </div>
+                                            <div class="summary-actions">
+                                                <button type="button" class="btn btn-s btn-primary js-save-summary"><?php _e('保存'); ?></button>
+                                                <button type="button" class="btn btn-s js-clear-summary"><?php _e('清空'); ?></button>
+                                                <button type="button" class="btn btn-s js-cancel-summary"><?php _e('取消'); ?></button>
+                                            </div>
+                                            <div class="summary-meta"><?php _e('字数'); ?>：<span class="summary-length"><?php echo $summaryLength; ?></span></div>
+                                        </div>
                                     </td>
                                     <td>
-                                        <button type="button" class="btn btn-generate generate-summary"
-                                                data-cid="<?php $posts->cid(); ?>">生成摘要
-                                        </button>
+                                        <button type="button" class="btn btn-s btn-primary js-generate-summary"><?php _e('生成摘要'); ?></button>
                                     </td>
                                 </tr>
                             <?php endwhile; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="5"><h6 class="typecho-list-table-title">没有任何文章</h6></td>
+                                <td colspan="4" class="none"><?php _e('没有任何文章'); ?></td>
                             </tr>
                         <?php endif; ?>
                         </tbody>
                     </table>
-                </div>
+                </form>
 
-                <div class="typecho-list-operate clearfix">
+                <form method="get" class="typecho-list-operate">
                     <?php if ($posts->have()): ?>
                         <ul class="typecho-pager">
                             <?php $posts->pageNav(); ?>
                         </ul>
                     <?php endif; ?>
-                </div>
+                </form>
             </div>
         </div>
     </div>
-</div>
+</main>
 
+<?php include 'copyright.php'; ?>
+<?php include 'common-js.php'; ?>
 <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        // Typecho 通知工具函数（纯前端版）
-        const showTypechoNotice = (() => {
-            let currentNotice = null; // 当前正在显示的通知
-            let isShowingNotice = false; // 标记当前是否有通知正在显示
+(function ($) {
+    $(function () {
+        var actionUrl = <?php echo json_encode($actionBase, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+        var emptyText = <?php echo json_encode(_t('暂无摘要，点击此处编辑'), JSON_UNESCAPED_UNICODE); ?>;
+        var generatingText = <?php echo json_encode(_t('生成中...'), JSON_UNESCAPED_UNICODE); ?>;
+        var generateText = <?php echo json_encode(_t('生成摘要'), JSON_UNESCAPED_UNICODE); ?>;
+        var requestFailText = <?php echo json_encode(_t('请求失败'), JSON_UNESCAPED_UNICODE); ?>;
+        var currentNotice = null;
+        var actionJoiner = actionUrl.indexOf('?') >= 0 ? '&' : '?';
+        var $table = $('.typecho-list-table');
+        var $batchButton = $('.js-generate-summary-batch');
+        var batchRunning = false;
 
-            return (message, type = 'success') => {
-                const head = document.querySelector('.typecho-head-nav');
-                const messageHtml = `
-            <div class="message popup ${type}">
-                <ul>
-                    <li>${message}</li>
-                </ul>
-            </div>
-        `;
+        // 只复用 Typecho 的选择能力，不接管动作链接，避免干扰当前页的自定义按钮事件。
+        $('.typecho-list-table').tableSelectable({
+            checkEl: 'input[name="cid[]"]',
+            rowEl: 'tbody tr[data-cid]',
+            selectAllEl: '.typecho-table-select-all'
+        });
 
-                // 创建通知元素
-                const notice = $(messageHtml);
-                let offset = 0;
+        $('.btn-drop').dropdownMenu({
+            btnEl: '.dropdown-toggle',
+            menuEl: '.dropdown-menu'
+        });
 
-                // 插入到 DOM
-                if (head) {
-                    $(head).after(notice);
-                    offset = head.offsetHeight;
-                } else {
-                    $('body').prepend(notice);
-                }
+        function notice(message, type) {
+            var $notice = $('<div class="message popup ' + (type || 'success') + '" style="display:none;"><ul><li></li></ul></div>');
+            var $host = $('.typecho-head-nav');
 
-                // 滚动处理
-                const checkScroll = () => {
-                    const scrollTop = $(window).scrollTop();
-                    notice.css({
-                        'position': scrollTop >= offset ? 'fixed' : 'absolute',
-                        'top': scrollTop >= offset ? 0 : offset
-                    });
-                };
-
-                // 显示动画
-                const showNotice = () => {
-                    notice.slideDown(() => {
-                        let highlightColor = '#C6D880'; // success
-                        if (type === 'error') highlightColor = '#FBC2C4';
-                        if (type === 'notice') highlightColor = '#FFD324';
-
-                        notice.effect('highlight', {color: highlightColor}, 500, () => {
-                            notice.delay(3000).fadeOut(() => {
-                                notice.remove();
-                                isShowingNotice = false; // 当前通知消失
-                                currentNotice = null;
-                            });
-                        });
-                    });
-
-                    // 绑定滚动事件
-                    $(window).scroll(checkScroll);
-                    checkScroll();
-                };
-
-                // 如果有通知正在显示，立即触发当前通知的消失动画
-                if (isShowingNotice && currentNotice) {
-                    currentNotice.stop(true, true).fadeOut(300, () => {
-                        currentNotice.remove();
-                        isShowingNotice = false;
-                        currentNotice = null;
-
-                        // 显示新的通知
-                        isShowingNotice = true;
-                        currentNotice = notice;
-                        showNotice();
-                    });
-                } else {
-                    // 如果没有通知正在显示，直接显示新通知
-                    isShowingNotice = true;
-                    currentNotice = notice;
-                    showNotice();
-                }
-            };
-        })();
-
-        // 通用工具函数
-        const toggleElements = (elements, displayStates) =>
-            elements.forEach((el, i) => el.style.display = displayStates[i]);
-
-        const handleFetch = async (url, body) => {
-            try {
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(body)
-                });
-                return await res.json();
-            } catch (e) {
-                console.error('请求失败，请检查网络连接！');
-                return {success: false};
+            $notice.find('li').text(message);
+            if (currentNotice) {
+                currentNotice.remove();
             }
-        };
 
-        // 摘要编辑功能
-        const setupSummaryEditing = () => {
-            document.querySelectorAll('.summary-cell').forEach(cell => {
-                const [
-                    summaryText,
-                    summaryEdit,
-                    summaryButtons,
-                    saveButton,
-                    cancelButton
-                ] = ['summary-text', 'summary-edit', 'summary-buttons', 'save-summary', 'cancel-summary']
-                    .map(cls => cell.querySelector(`.${cls}`));
+            if ($host.length) {
+                $host.after($notice);
+            } else {
+                $('body').prepend($notice);
+            }
 
-                const toggleEditMode = (showEdit) => {
-                    const displayStates = showEdit
-                        ? ['none', 'block', 'block']
-                        : ['block', 'none', 'none'];
-                    toggleElements([summaryText, summaryEdit, summaryButtons], displayStates);
-                    summaryEdit.value = summaryText.textContent === '暂无摘要' ? '' : summaryText.textContent;
-                };
-
-                // 将点击事件监听器添加到整个单元格
-                cell.addEventListener('click', (event) => {
-                    event.stopPropagation();
-                    // 如果点击的是按钮区域，则不触发编辑模式
-                    if (!event.target.closest('.summary-buttons')) {
-                        toggleEditMode(true);
-                    }
-                });
-
-                saveButton.addEventListener('click', async () => {
-                    const cid = cell.closest('tr').id.split('-').pop();
-                    try {
-                        const data = await handleFetch(
-                            '<?php echo \Utils\Helper::options()->index . "/action/summaries?do=save"; ?>',
-                            {cid, summary: summaryEdit.value}
-                        );
-
-                        if (data.success) {
-                            showTypechoNotice('摘要保存成功！');
-                            summaryText.textContent = summaryEdit.value || '暂无摘要';
-                            const row = cell.closest('tr');
-                            const lengthSpan = row.querySelector('td:nth-child(4) span');
-                            lengthSpan.textContent = summaryEdit.value.length;
-                            toggleEditMode(false); // 保存成功后隐藏编辑框
-                        } else {
-                            showTypechoNotice(data.message, 'error');
-                        }
-                    } catch {
-                        showTypechoNotice('摘要保存失败！', 'error');
-                    }
-                });
-
-                cancelButton.addEventListener('click', (event) => {
-                    event.stopPropagation(); // 阻止事件冒泡
-                    toggleEditMode(false); // 取消编辑时隐藏编辑框
-                });
-
-                // 点击页面其他区域时隐藏编辑框
-                document.addEventListener('click', (event) => {
-                    if (!cell.contains(event.target)) {
-                        toggleEditMode(false);
-                    }
-                });
+            currentNotice = $notice;
+            $notice.slideDown().delay(2400).fadeOut(200, function () {
+                $(this).remove();
+                if (currentNotice && currentNotice[0] === this) {
+                    currentNotice = null;
+                }
             });
-        };
+        }
 
-        // 单个生成功能
-        const setupGenerateButtons = () => {
-            document.querySelectorAll('.generate-summary').forEach(button => {
-                button.addEventListener('click', async () => {
-                    const cid = button.dataset.cid;
-                    const row = button.closest('tr');
-                    const summaryCell = row.querySelector('.summary-text');
+        function cellOf($row) {
+            return $row.find('.summary-cell');
+        }
 
-                    // 更新UI状态
-                    const toggleLoading = (isLoading) => {
-                        row.classList.toggle('disabled-row', isLoading);
-                        button.textContent = isLoading ? '生成中...' : '生成摘要';
-                        button.disabled = isLoading;
-                    };
+        function summaryOf($cell) {
+            return $.trim($cell.attr('data-summary') || '');
+        }
 
-                    toggleLoading(true);
+        function resetEditor($cell) {
+            $cell.find('textarea').val(summaryOf($cell));
+        }
 
-                    try {
-                        const data = await handleFetch(
-                            '<?php echo \Utils\Helper::options()->index . "/action/summaries?do=generate"; ?>',
-                            {cid}
-                        );
+        function syncRow($row, data) {
+            var summary = $.trim(data && data.summary ? data.summary : '');
+            var $cell = cellOf($row).removeClass('summary-editing');
 
-                        if (data.success) {
-                            summaryCell.textContent = data.summary || '暂无摘要';
-                            const lengthSpan = row.querySelector('td:nth-child(4) span'); // 注意列位置调整
-                            lengthSpan.textContent = data.summary ? data.summary.length : 0;
-                        } else {
-                            showTypechoNotice(data.message || '摘要生成失败，请重试！', 'error');
-                        }
-                    } finally {
-                        toggleLoading(false);
-                    }
-                });
+            // data-summary 保存“真实值”，取消编辑时不依赖展示文案反推内容。
+            $cell.attr('data-summary', summary);
+            $cell.find('.summary-display').text(summary || emptyText);
+            resetEditor($cell);
+            $cell.find('.summary-length').text(data && data.length != null ? data.length : summary.length);
+        }
+
+        function toggleBusy($row, busy) {
+            $row.toggleClass('summary-busy', !!busy);
+            $row.find('.js-generate-summary, .js-save-summary, .js-clear-summary, .js-cancel-summary').prop('disabled', !!busy);
+            $row.find('.js-generate-summary').text(busy ? generatingText : generateText);
+        }
+
+        function closeEditors($keep) {
+            $table.find('.summary-cell.summary-editing').not($keep).each(function () {
+                var $cell = $(this);
+
+                resetEditor($cell);
+                $cell.removeClass('summary-editing');
             });
-        };
+        }
 
-        // 批量生成功能
-        const setupBatchGenerate = () => {
-            document.getElementById('generate-summary-batch').addEventListener('click', async () => {
-                const checkboxes = document.querySelectorAll('input[name="cid[]"]:checked');
+        function request(action, data) {
+            return $.ajax({
+                url: actionUrl + actionJoiner + 'do=' + encodeURIComponent(action),
+                type: 'POST',
+                data: data,
+                dataType: 'json'
+            });
+        }
 
-                if (!checkboxes.length) {
-                    showTypechoNotice('请至少选择一篇文章！', 'notice');
+        function failMessage(xhr, fallback) {
+            var response = xhr.responseJSON || {};
+
+            return response.message || fallback || requestFailText;
+        }
+
+        function runAction(action, $row, data, doneMessage) {
+            toggleBusy($row, true);
+
+            return request(action, data).done(function (response) {
+                if (!response || !response.success) {
+                    notice(response && response.message ? response.message : requestFailText, 'error');
                     return;
                 }
 
-                // 第一阶段：设置所有选中行状态
-                const processList = [];
-                checkboxes.forEach(checkbox => {
-                    const row = checkbox.closest('tr');
-                    const button = row.querySelector('.generate-summary');
-                    const summaryCell = row.querySelector('.summary-text');
-
-                    // 设置加载状态
-                    row.classList.add('disabled-row');
-                    button.textContent = '生成中...';
-                    button.disabled = true;
-
-                    // 创建处理队列
-                    processList.push({
-                        checkbox,
-                        row,
-                        button,
-                        summaryCell
-                    });
-                });
-
-                // 第二阶段：顺序处理请求
-                for (const {checkbox, row, button, summaryCell} of processList) {
-                    try {
-                        const data = await handleFetch(
-                            '<?php echo \Utils\Helper::options()->index . "/action/summaries?do=generate"; ?>',
-                            {cid: checkbox.value}
-                        );
-
-                        if (data.success) {
-                            summaryCell.textContent = data.summary || '暂无摘要';
-                            const lengthSpan = row.querySelector('td:nth-child(4) span'); // 注意列位置调整
-                            lengthSpan.textContent = data.summary ? data.summary.length : 0;
-                            showTypechoNotice(`文章 ID ${checkbox.value} 生成成功`);
-                        } else {
-                            showTypechoNotice(`文章 ID ${checkbox.value} 生成失败`, 'error');
-                        }
-                    } catch (e) {
-                        showTypechoNotice(`文章 ID ${checkbox.value} 请求异常：${e.message}`, 'error');
-                    } finally {
-                        // 逐条恢复状态
-                        row.classList.remove('disabled-row');
-                        button.textContent = '生成摘要';
-                        button.disabled = false;
-                    }
+                syncRow($row, response.data || {});
+                if (doneMessage) {
+                    notice(response.message || doneMessage);
                 }
+            }).fail(function (xhr) {
+                notice(failMessage(xhr), 'error');
+            }).always(function () {
+                toggleBusy($row, false);
             });
-        };
+        }
 
-        // 初始化所有功能
-        setupSummaryEditing();
-        setupGenerateButtons();
-        setupBatchGenerate();
+        $table.find('.summary-cell').on('click', function (event) {
+            event.stopPropagation();
+        });
+
+        $table.find('.summary-display').on('click', function () {
+            var $cell = $(this).closest('.summary-cell');
+
+            closeEditors($cell);
+            $cell.addClass('summary-editing').find('textarea').trigger('focus');
+        });
+
+        $table.find('.js-cancel-summary').on('click', function () {
+            var $cell = $(this).closest('.summary-cell');
+
+            resetEditor($cell);
+            $cell.removeClass('summary-editing');
+        });
+
+        $table.find('.js-clear-summary').on('click', function () {
+            var $row = $(this).closest('tr[data-cid]');
+
+            runAction('save', $row, {
+                cid: $row.data('cid'),
+                summary: ''
+            }, '摘要已清空');
+        });
+
+        $table.find('.js-save-summary').on('click', function () {
+            var $row = $(this).closest('tr[data-cid]');
+
+            runAction('save', $row, {
+                cid: $row.data('cid'),
+                summary: $row.find('textarea').val()
+            }, '摘要保存成功');
+        });
+
+        $table.find('.js-generate-summary').on('click', function (event) {
+            var $row = $(this).closest('tr[data-cid]');
+
+            event.preventDefault();
+            runAction('generate', $row, {cid: $row.data('cid')}, '摘要生成成功');
+        });
+
+        // 点击空白区域时关闭其它编辑器，保持单行编辑体验。
+        $(document).on('click', function (event) {
+            if (!$(event.target).closest('.summary-cell').length) {
+                closeEditors();
+            }
+        });
+
+        function runBatch($rows, index) {
+            var $row;
+
+            if (index >= $rows.length) {
+                batchRunning = false;
+                $batchButton.removeClass('disabled');
+                notice('批量生成完成');
+                return;
+            }
+
+            $row = $rows.eq(index);
+            toggleBusy($row, true);
+
+            // 批量生成按顺序串行执行，减少接口并发带来的限流和提示混乱。
+            request('generate', {cid: $row.data('cid')}).done(function (response) {
+                if (response && response.success) {
+                    syncRow($row, response.data || {});
+                    return;
+                }
+
+                notice('文章 ' + $row.data('cid') + ' 生成失败：' + (response && response.message ? response.message : requestFailText), 'error');
+            }).fail(function (xhr) {
+                notice('文章 ' + $row.data('cid') + ' 生成失败：' + failMessage(xhr), 'error');
+            }).always(function () {
+                toggleBusy($row, false);
+                runBatch($rows, index + 1);
+            });
+        }
+
+        $batchButton.on('click', function (event) {
+            var $rows = $table.find('input[name="cid[]"]:checked').closest('tr[data-cid]');
+
+            event.preventDefault();
+            if (batchRunning) {
+                return;
+            }
+
+            if (!$rows.length) {
+                notice('请至少选择一篇文章', 'notice');
+                return;
+            }
+
+            batchRunning = true;
+            $batchButton.addClass('disabled');
+            runBatch($rows, 0);
+        });
     });
+})(jQuery);
 </script>
-
-<?php
-// 引入页脚文件
-require 'copyright.php';
-require 'common-js.php';
-require 'table-js.php';
-require 'footer.php';
-?>
+<?php include 'footer.php'; ?>

@@ -2,13 +2,15 @@
 
 namespace TypechoPlugin\AIContentSummary;
 
-use Typecho\Plugin\Exception;
+use Typecho\Common;
+use Typecho\Db;
+use Typecho\Http\Client;
+use Typecho\Plugin\Exception as PluginException;
 use Typecho\Plugin\PluginInterface;
 use Typecho\Widget\Helper\Form;
 use Typecho\Widget\Helper\Form\Element\Password;
 use Typecho\Widget\Helper\Form\Element\Radio;
 use Typecho\Widget\Helper\Form\Element\Text;
-use Typecho\Db;
 use Typecho\Widget\Helper\Form\Element\Textarea;
 use Typecho\Widget\Helper\Form\Element\Url;
 use Typecho\Widget\Helper\Layout;
@@ -16,415 +18,466 @@ use Utils\Helper;
 use Widget\Base\Contents;
 use Widget\Contents\Post\Edit;
 use Widget\Options;
+use Widget\User;
 
 if (!defined('__TYPECHO_ROOT_DIR__')) {
     exit;
 }
 
 /**
- * AIContentSummary 是一个用于通过 AI 生成文章摘要的 Typecho 插件
+ * AIContentSummary 插件入口。
  *
  * @package AIContentSummary
  * @author Rockytkg
- * @version 1.4
+ * @version 2.0.0
  * @link https://github.com/Rockytkg/AIContentSummary
  */
-class Plugin implements PluginInterface
+final class Plugin implements PluginInterface
 {
+    public const NAME = 'AIContentSummary';
+
     /**
-     * 激活插件方法，如果激活失败，直接抛出异常
-     *
-     * 注册自定义摘要生成方法和文章发布完成时的回调
-     * @throws Exception
+     * 注册前台渲染钩子、编辑页字段与后台管理入口。
      */
     public static function activate(): void
     {
-        // 检查 curl 扩展是否已安装
-        if (!extension_loaded('curl')) {
-            // 使用 Typecho 的插件异常机制，阻止插件激活
-            throw new Exception(_t('需要启用 PHP cURL 扩展才能使用本插件'));
+        if (Client::get() === null) {
+            throw new PluginException(_t('需要启用 PHP cURL 扩展才能使用 AIContentSummary'));
         }
 
-        // 注册自定义摘要生成方法
-        \Typecho\Plugin::factory('Widget\Base\Contents')->excerptEx = __CLASS__ . '::customExcerpt';
-        // 注册文章发布完成时的回调
-        \Typecho\Plugin::factory('Widget\Contents\Post\Edit')->finishPublish = __CLASS__ . '::onFinishPublish';
-        // 注册文章删除时的回调
-        \Typecho\Plugin::factory('Widget\Contents\Post\Edit')->delete = __CLASS__ . '::onDelete';
-        // 添加后台管理页面
-        Helper::addPanel(3, 'AIContentSummary/template/summaries.php', _t('摘要管理'), _t('管理AI摘要'), 'administrator');
-        // 注册管理路由
-        Helper::addAction('summaries', 'TypechoPlugin\AIContentSummary\Action');
-        // 注册文章编辑页的默认字段
-        \Typecho\Plugin::factory('Widget\Contents\Post\Edit')->getDefaultFieldItems = __CLASS__ . '::addDefaultFieldItems';
-        // 注册输出文章内容时的回调
-        \Typecho\Plugin::factory('Widget\Base\Contents')->contentEx = __CLASS__ . '::customContent';
+        \Typecho\Plugin::factory('Widget\Base\Contents')->excerptEx = self::class . '::excerpt';
+        \Typecho\Plugin::factory('Widget\Base\Contents')->contentEx = self::class . '::content';
+        \Typecho\Plugin::factory('Widget\Contents\Post\Edit')->finishPublish = self::class . '::finishPublish';
+        \Typecho\Plugin::factory('Widget\Contents\Post\Edit')->getDefaultFieldItems = self::class . '::addField';
+
+        Helper::addPanel(3, self::NAME . '/template/summaries.php', _t('摘要管理'), _t('管理 AI 摘要'), 'administrator');
+        Helper::addAction('summaries', Action::class);
     }
 
     /**
-     * 禁用插件方法，如果禁用失败，直接抛出异常
-     *
-     * 插件禁用时无需额外操作
+     * 卸载插件时移除后台面板与动作路由。
      */
-    public static function deactivate()
+    public static function deactivate(): void
     {
-        // 移除后台管理页面
-        Helper::removePanel(3, 'AIContentSummary/template/summaries.php');
-        // 注销路由
+        Helper::removePanel(3, self::NAME . '/template/summaries.php');
         Helper::removeAction('summaries');
     }
 
     /**
-     * 获取插件配置面板
-     *
-     * @param Form $form 配置面板对象
+     * 构建插件配置表单。
      */
     public static function config(Form $form): void
     {
-        /** 模型名称 */
-        $modelName = new Text('modelName', null, 'gpt-3.5-turbo', _t('模型名称'), _t('用于生成摘要的 AI 模型名称'));
-        $form->addInput($modelName->addRule('required', _t('模型名称不能为空')));
-
-        /** API Key */
-        $apiKey = new Password('apiKey', null, null, _t('API Key'), _t('用于调用 API 的密钥'));
-        $form->addInput($apiKey->addRule('required', _t('API Key 不能为空')));
-
-        /** API 地址 */
-        $apiUrl = new Url('apiUrl', null, null, _t('API 地址'), _t('API 的完整地址，例如 https://api.example.com/v1'));
-        $form->addInput($apiUrl->addRule('required', _t('API 地址不能为空')));
-
-        /** 系统提示词 */
-        $prompt = new Textarea('prompt', null,
-            "你是一个专业的文章摘要生成专家。请严格按照以下要求执行：\n\n" .
-            "1. 输入：完整的文章内容\n" .
-            "2. 输出语言：简体中文\n" .
-            "3. 输出：简洁的摘要\n" .
-            "4. 限制条件：\n" .
-            "   - 最大长度：100 字符\n" .
-            "   - 保持关键信息密度\n" .
-            "   - 保留原文语气和风格\n" .
-            "   - 聚焦核心概念和发现\n" .
-            "5. 格式：纯文本，无标记\n" .
-            "6. 质量检查：\n" .
-            "   - 事实准确性\n" .
-            "   - 逻辑连贯性\n" .
-            "   - 信息完整性\n" .
-            "   - 语言一致性",
-            _t('系统提示词'),
-            _t('生成摘要的系统提示词')
+        $form->addInput(
+            new Text(
+                'modelName',
+                null,
+                'gpt-4o-mini',
+                _t('模型名称'),
+                _t('聊天补全接口使用的模型名，例如 gpt-4o-mini。')
+            )
         );
-        $form->addInput($prompt->addRule('required', _t('Prompt 不能为空')));
 
-        /** 自定义字段名称 */
-        $fieldName = new Text('fieldName', null, 'ai_summary', _t('自定义字段名称'), _t('用于保存生成的摘要的自定义字段名称，默认为 ai_summary'));
-        $form->addInput($fieldName->addRule('required', _t('字段名称不能为空')));
-
-        /** 发布是否生成摘要 */
-        $finishPublishSummary = new Radio('finishPublishSummary', array('1' => _t('是'), '0' => _t('否')), '1', _t('是否生成摘要'), _t('是否在文章修改或发布时生成摘要，会使得发布速度变慢，请耐心等待'));
-        $form->addInput($finishPublishSummary);
-
-        /** 摘要长度 */
-        $summaryLength = new Text('summaryLength', null, '100', _t('摘要长度'), _t('首页输出的摘要的最大长度（字符数）'));
-        $form->addInput($summaryLength->addRule('required', _t('摘要长度不能为空'))->addRule('isInteger', _t('摘要长度必须为整数'))->addRule('min', _t('摘要长度不能小于 1'), 1));
-
-        /** 正文头部是否输出摘要 */
-        $outputSummaryInHeader = new Radio('outputSummaryInHeader', array('1' => _t('是'), '0' => _t('否')), '1', _t('文章头部是否输出摘要'), _t('是否在文章头部输出生成的摘要'));
-        $form->addInput($outputSummaryInHeader);
-
-        /** 正文摘要模板 */
-        $summaryTemplate = new Textarea('summaryTemplate', null,
-            "<div class=\"ai-summary\">\n" .
-            "    <b>摘要：</b>{summary}\n" .
-            "</div>\n\n" .
-            "<style>\n" .
-            "    .ai-summary {\n" .
-            "        background-color: #2C3E50;\n" .
-            "        color: white;\n" .
-            "        padding: 20px;\n" .
-            "        border-radius: 10px;\n" .
-            "        margin-bottom: 1rem;\n" .
-            "    }\n" .
-            "</style>",
-            _t('正文摘要模板'),
-            _t('用于在正文中显示摘要的模板，使用 {summary} 作为摘要内容的占位符')
+        $form->addInput(
+            new Password(
+                'apiKey',
+                null,
+                '',
+                _t('API Key'),
+                _t('用于调用摘要接口的密钥，留空时会保留现有值。')
+            )
         );
-        $form->addInput($summaryTemplate->addRule('required', _t('正文摘要模板不能为空')));
+
+        $form->addInput(
+            (new Url(
+                'apiUrl',
+                null,
+                '',
+                _t('API 地址'),
+                _t('填写接口根地址，例如 https://api.example.com/v1，也支持直接填写 /chat/completions 完整地址。')
+            ))->addRule('url', _t('请填写合法的 API 地址'))
+        );
+
+        $form->addInput(
+            (new Textarea(
+                'prompt',
+                null,
+                <<<'PROMPT'
+你是一名专业的文章摘要编辑。
+
+请基于输入的完整文章生成一段简体中文摘要，并严格遵守以下要求：
+1. 只输出摘要正文，不要添加标题、标签、引号或解释。
+2. 摘要要准确、克制、信息密度高。
+3. 保留原文核心观点、结论和语气。
+4. 输出长度控制在 100 字以内。
+PROMPT,
+                _t('系统提示词'),
+                _t('用于约束摘要风格与输出格式。')
+            ))->addRule('required', _t('系统提示词不能为空'))
+        );
+
+        $form->addInput(
+            (new Text(
+                'fieldName',
+                null,
+                'ai_summary',
+                _t('摘要字段名'),
+                _t('摘要保存在文章自定义字段中的字段名，仅支持字母、数字和下划线，且不能以数字开头。')
+            ))
+                ->addRule('required', _t('摘要字段名不能为空'))
+                ->addRule('regexp', _t('摘要字段名格式不正确'), '/^[_a-zA-Z][_a-zA-Z0-9]*$/')
+        );
+
+        $form->addInput(
+            new Radio(
+                'finishPublishSummary',
+                ['1' => _t('开启'), '0' => _t('关闭')],
+                '0',
+                _t('发布时自动生成'),
+                _t('开启后会在文章发布或更新时为没有摘要的文章自动生成摘要。')
+            )
+        );
+
+        $form->addInput(
+            (new Text(
+                'summaryLength',
+                null,
+                '100',
+                _t('摘要截断长度'),
+                _t('用于 excerptEx 输出时的最大字符数。')
+            ))
+                ->addRule('required', _t('摘要截断长度不能为空'))
+                ->addRule('isInteger', _t('摘要截断长度必须为整数'))
+                ->addRule('min', _t('摘要截断长度不能小于 1'), 1)
+        );
+
+        $form->addInput(
+            new Radio(
+                'outputSummaryInHeader',
+                ['1' => _t('开启'), '0' => _t('关闭')],
+                '1',
+                _t('正文前置摘要'),
+                _t('开启后会在文章正文顶部渲染摘要模板。')
+            )
+        );
+
+        $form->addInput(
+            (new Textarea(
+                'summaryTemplate',
+                null,
+                <<<'HTML'
+<aside class="ai-content-summary"><strong>摘要：</strong><p>{summary}</p></aside>
+HTML,
+                _t('摘要模板'),
+                _t('正文前置摘要模板，必须包含 {summary} 占位符。')
+            ))
+                ->addRule('required', _t('摘要模板不能为空'))
+                ->addRule(
+                    static fn(?string $template): bool => str_contains((string) $template, '{summary}'),
+                    _t('摘要模板必须包含 {summary} 占位符')
+                )
+        );
     }
 
+    /**
+     * 插件未提供个人配置项，这里保留空实现以符合接口约定。
+     */
+    public static function personalConfig(Form $form): void {}
 
     /**
-     * 个人用户的配置面板
-     *
-     * @param Form $form 配置面板对象
+     * 在摘要存在时优先输出摘要作为 excerpt。
      */
-    public static function personalConfig(Form $form)
+    public static function excerpt(string $excerpt, Contents $widget): string
     {
-        // 无需个人配置
+        $settings = Options::alloc()->plugin(self::NAME);
+        $summary = $widget->fields->{$settings->fieldName} ?? null;
+        $summary = is_string($summary) ? trim($summary) : '';
+
+        return $summary === ''
+            ? $excerpt
+            : Common::subStr($summary, 0, (int) $settings->summaryLength);
     }
 
     /**
-     * 自定义配置方法
-     *
-     * @param array $settings 配置项
-     * @param bool $isInit 是否为初始化
-     * @throws Db\Exception|Exception
+     * 按配置将摘要插入正文顶部。
      */
-    public static function configHandle(array $settings, bool $isInit)
+    public static function content(string $content, Contents $widget): string
     {
-        // 只在非初始化时处理配置更新
-        if (!$isInit) {
-            $settings = array_map('trim', $settings);
-
-            if (isset($settings['fieldName'])) {
-                $newFieldName = $settings['fieldName'];
-                $options = \Typecho\Widget::widget('Widget\Options');
-                $oldFieldName = $options->plugin('AIContentSummary')->fieldName ?? 'ai_summary';
-
-                if ($oldFieldName !== $newFieldName) {
-                    $db = Db::get();
-                    $db->query(
-                        $db->delete('table.fields')
-                            ->where('name = ?', $newFieldName)
-                    );
-                    $db->query(
-                        $db->update('table.fields')
-                            ->rows(['name' => $newFieldName])
-                            ->where('name = ?', $oldFieldName)
-                    ); // 确保执行数据库更新操作
-                }
-            }
+        $settings = Options::alloc()->plugin(self::NAME);
+        if (!$settings->outputSummaryInHeader) {
+            return $content;
         }
 
-        // 保存插件配置
-        \Widget\Plugins\Edit::configPlugin('AIContentSummary', $settings);
-    }
-
-
-    /**
-     * 自定义摘要输出方法
-     *
-     * 根据文章内容生成摘要，如果自定义字段中有内容，则优先使用自定义字段的内容
-     *
-     * @param string $excerpt 原始摘要
-     * @param Contents $widget 文章内容对象
-     * @return string 生成的摘要
-     * @throws Exception
-     */
-    public static function customExcerpt(string $excerpt, Contents $widget): string
-    {
-        $options = Options::alloc()->plugin('AIContentSummary');
-        $fieldName = $options->fieldName ?? 'ai_summary'; // 默认字段名称为 ai_summary
-        $customContent = $widget->fields->$fieldName ?? null; // 获取自定义字段的内容
-        $maxLength = $options->summaryLength;
-
-        // 如果自定义字段中有内容，则使用该内容作为摘要
-        if (!empty($customContent)) {
-            $excerpt = $customContent;
-
-            // 如果摘要长度超过最大长度，则截断并添加省略号
-            if (mb_strlen($excerpt) > $maxLength) {
-                $excerpt = mb_substr($excerpt, 0, $maxLength) . '...';
-            }
+        $summary = $widget->fields->{$settings->fieldName} ?? null;
+        $summary = is_string($summary) ? trim($summary) : '';
+        if ($summary === '') {
+            return $content;
         }
 
-        return $excerpt;
+        return str_replace(
+            '{summary}',
+            htmlspecialchars($summary, ENT_QUOTES, 'UTF-8'),
+            $settings->summaryTemplate
+        ) . $content;
     }
 
     /**
-     * 文章发布完成时的回调
-     *
-     * @param array $contents 文章内容
-     * @param Edit $obj 文章编辑对象
-     * @throws Db\Exception|Exception
+     * 发布完成后按需生成摘要。
      */
-    public static function onFinishPublish(array $contents, Edit $obj): void
+    public static function finishPublish(array $contents, Edit $editor): void
     {
-        $options = Options::alloc()->plugin('AIContentSummary');
-        // 判断是否开启发布文章生成摘要
-        if ($options->finishPublishSummary === '0') {
+        $settings = Options::alloc()->plugin(self::NAME);
+        if (!$settings->finishPublishSummary || !self::isAdministrator()) {
             return;
         }
-        $fieldName = $options->fieldName ?? 'ai_summary';
 
-        $db = Db::get();
-        $rows = $db->fetchRow($db->select('str_value')
-            ->from('table.fields')
-            ->where('cid = ?', $obj->cid)
-            ->where('name = ?', $fieldName));
-
-        if (!$rows || empty($rows['str_value'])) {
-            $apiResponse = self::callApi($contents['text']);
-            self::saveSummary($obj->cid, $apiResponse);
-        }
+        self::ensureSummary((int) $editor->cid, (string) ($contents['text'] ?? ''));
     }
 
     /**
-     * 保存文章摘要到数据库
+     * 为管理员添加文章摘要字段。
      *
-     * @param int $cid 文章ID
-     * @param string $summary 摘要内容
-     * @throws Db\Exception
+     * 这里注入的是“默认自定义字段”元素，最终会由 Typecho 的
+     * `admin/custom-fields.php` 包装成字段名/字段值两列布局。
      */
-    public static function saveSummary(int $cid, string $summary): void
+    public static function addField(Layout $layout): void
     {
-        $db = Db::get();
-        $fieldName = Options::alloc()->plugin('AIContentSummary')->fieldName;
-        $rows = $db->fetchRow($db->select('str_value')
-            ->from('table.fields')
-            ->where('cid = ?', $cid)
-            ->where('name = ?', $fieldName));
+        if (!self::isAdministrator()) {
+            return;
+        }
 
-        if ($rows) {
-            // 更新已存在的字段
-            $db->query($db->update('table.fields')
-                ->rows(['str_value' => $summary])
+        $field = new Textarea(
+            Options::alloc()->plugin(self::NAME)->fieldName,
+            null,
+            null,
+            _t('AI 摘要'),
+            _t('手动填写后将优先作为文章摘要输出，同时跳过发布时的自动生成。')
+        );
+        // 自定义字段区域会把 textarea 放进 field-value 列，这里只需要控制输入框尺寸。
+        $field->setInputsAttribute('style', 'width:100%;height:96px;');
+
+        $layout->addItem($field);
+    }
+
+    /**
+     * 为没有摘要的文章生成摘要。
+     *
+     * 发布钩子会优先使用当前编辑器中的正文，避免重复查询数据库。
+     */
+    public static function ensureSummary(int $cid, string $text = ''): ?string
+    {
+        $fieldName = Options::alloc()->plugin(self::NAME)->fieldName;
+        $exists = Db::get()->fetchRow(
+            Db::get()->select('str_value')
+                ->from('table.fields')
+                ->where('cid = ? AND name = ?', $cid, $fieldName)
+                ->limit(1)
+        );
+
+        if ($exists && trim((string) $exists['str_value']) !== '') {
+            return null;
+        }
+
+        $summary = self::generateSummary($text !== '' ? $text : (string) self::post($cid)['text']);
+        self::saveSummary($cid, $summary);
+
+        return $summary;
+    }
+
+    /**
+     * 生成并保存摘要。
+     *
+     * @return array{cid:int,summary:string,length:int,hasSummary:bool}
+     */
+    public static function generateForPost(int $cid): array
+    {
+        $summary = self::generateSummary((string) self::post($cid)['text']);
+        self::saveSummary($cid, $summary);
+
+        $summary = trim($summary);
+
+        return [
+            'cid' => $cid,
+            'summary' => $summary,
+            'length' => Common::strLen($summary),
+            'hasSummary' => $summary !== '',
+        ];
+    }
+
+    /**
+     * 手动保存或清空摘要。
+     *
+     * @return array{cid:int,summary:string,length:int,hasSummary:bool}
+     */
+    public static function saveManual(int $cid, string $summary): array
+    {
+        // 先校验文章存在，避免为失效 cid 写入自定义字段。
+        self::post($cid);
+        $db = Db::get();
+        $fieldName = Options::alloc()->plugin(self::NAME)->fieldName;
+        $summary = trim($summary);
+
+        if ($summary === '') {
+            // 手动清空时直接删除字段，前台渲染可自然回退到默认摘要逻辑。
+            $db->query(
+                $db->delete('table.fields')
+                    ->where('cid = ? AND name = ?', $cid, $fieldName)
+            );
+
+            return [
+                'cid' => $cid,
+                'summary' => '',
+                'length' => 0,
+                'hasSummary' => false,
+            ];
+        }
+
+        self::saveSummary($cid, $summary);
+
+        return [
+            'cid' => $cid,
+            'summary' => $summary,
+            'length' => Common::strLen($summary),
+            'hasSummary' => true,
+        ];
+    }
+
+    /**
+     * 判断当前用户是否为管理员。
+     */
+    private static function isAdministrator(): bool
+    {
+        return User::alloc()->pass('administrator', true);
+    }
+
+    /**
+     * 调用 AI 客户端生成摘要。
+     */
+    private static function generateSummary(string $text): string
+    {
+        $settings = Options::alloc()->plugin(self::NAME);
+
+        // 去掉编辑器标记后再送给模型，避免把控制标记也纳入摘要语义。
+        $text = trim(str_replace(['<!--markdown-->', '<!--more-->'], '', $text));
+        if ($text === '') {
+            throw new \RuntimeException(_t('文章内容为空，无法生成摘要'));
+        }
+
+        if ($settings->modelName === '' || $settings->apiKey === '' || $settings->apiUrl === '') {
+            throw new \RuntimeException(_t('请先完整配置模型名称、API Key 和 API 地址'));
+        }
+
+        $client = Client::get();
+        if ($client === null) {
+            throw new \RuntimeException(_t('当前环境未启用 cURL 扩展'));
+        }
+
+        $client
+            ->setTimeout(30)
+            ->setHeader('Authorization', 'Bearer ' . $settings->apiKey)
+            ->setJson([
+                'model' => $settings->modelName,
+                'messages' => [
+                    ['role' => 'system', 'content' => $settings->prompt],
+                    ['role' => 'user', 'content' => $text],
+                ],
+                'temperature' => 0,
+            ])
+            ->send(
+                // 兼容填写接口根地址和直接填写 /chat/completions 完整地址两种方式。
+                str_ends_with($settings->apiUrl, '/chat/completions')
+                    ? $settings->apiUrl
+                    : rtrim((string) $settings->apiUrl, '/') . '/chat/completions'
+            );
+
+        try {
+            $payload = json_decode($client->getResponseBody(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            throw new \RuntimeException(_t('摘要接口返回了无法解析的数据'));
+        }
+
+        $status = $client->getResponseStatus();
+        if ($status < 200 || $status >= 300) {
+            throw new \RuntimeException((string) ($payload['error']['message'] ?? _t('摘要接口请求失败，HTTP %d', $status)), $status);
+        }
+
+        $summary = trim((string) ($payload['choices'][0]['message']['content'] ?? ''));
+        if ($summary === '') {
+            throw new \RuntimeException(_t('摘要接口未返回有效内容'));
+        }
+
+        return $summary;
+    }
+
+    /**
+     * 读取文章正文。
+     *
+     * 仅允许对正式文章和文章草稿生成摘要，避免把其它内容类型误当成文章处理。
+     *
+     * @return array<string, mixed>
+     * @throws \Typecho\Widget\Exception
+     */
+    private static function post(int $cid): array
+    {
+        $post = Db::get()->fetchRow(
+            Db::get()->select('cid', 'text')
+                ->from('table.contents')
                 ->where('cid = ?', $cid)
-                ->where('name = ?', $fieldName));
-        } else {
-            // 插入新字段
-            $db->query($db->insert('table.fields')
+                ->where('type IN ?', ['post', 'post_draft'])
+                ->limit(1)
+        );
+
+        if (!$post) {
+            throw new \Typecho\Widget\Exception(_t('文章不存在'), 404);
+        }
+
+        return $post;
+    }
+
+    /**
+     * 保存摘要字段。
+     *
+     * 已存在时更新，不存在时插入，保持字段写入幂等。
+     */
+    private static function saveSummary(int $cid, string $summary): void
+    {
+        $settings = Options::alloc()->plugin(self::NAME);
+        $summary = trim($summary);
+        $db = Db::get();
+        $exists = $db->fetchRow(
+            $db->select('cid')
+                ->from('table.fields')
+                ->where('cid = ? AND name = ?', $cid, $settings->fieldName)
+                ->limit(1)
+        );
+
+        if ($exists) {
+            // 编辑、重新生成时优先更新已有字段，避免产生重复 name/cid 记录。
+            $db->query(
+                $db->update('table.fields')
+                    ->rows([
+                        'type' => 'str',
+                        'str_value' => $summary,
+                        'int_value' => 0,
+                        'float_value' => 0,
+                    ])
+                    ->where('cid = ? AND name = ?', $cid, $settings->fieldName)
+            );
+
+            return;
+        }
+
+        // 首次生成或首次手动保存时插入一条新的字符串字段。
+        $db->query(
+            $db->insert('table.fields')
                 ->rows([
                     'cid' => $cid,
-                    'name' => $fieldName,
+                    'name' => $settings->fieldName,
                     'type' => 'str',
                     'str_value' => $summary,
                     'int_value' => 0,
-                    'float_value' => 0
-                ]));
-        }
-    }
-
-    /**
-     * 文章删除时的回调
-     *
-     * 在文章删除时，删除与该文章关联的摘要字段
-     *
-     * @param int $cid 文章 ID
-     * @throws Db\Exception|Exception
-     */
-    public static function onDelete(int $cid): void
-    {
-        $db = Db::get();
-        $options = Options::alloc()->plugin('AIContentSummary');
-        $fieldName = $options->fieldName ?? 'ai_summary'; // 默认字段名称为 ai_summary
-
-        // 删除与该文章关联的摘要字段
-        $db->query($db->delete('table.fields')
-            ->where('cid = ?', $cid)
-            ->where('name = ?', $fieldName));
-    }
-
-    /**
-     * 为文章编辑页添加自定义字段
-     *
-     * @param Layout $layout 布局
-     * @return void
-     * @throws Exception
-     */
-    public static function addDefaultFieldItems(Layout $layout)
-    {
-        $summaries = new Textarea(
-            Options::alloc()->plugin('AIContentSummary')->fieldName,
-            NULL,
-            NULL,
-            '自定义摘要',
-            '介绍：自定义摘要字段，输出摘要会优先输出这个字段的摘要'
+                    'float_value' => 0,
+                ])
         );
-        $layout->addItem($summaries);
-        echo '<style>
-            textarea[name="fields[' . Options::alloc()->plugin('AIContentSummary')->fieldName . ']"] {
-                width: 100%;
-                height: 80px;
-            }
-        </style>';
-    }
-
-    /**
-     * 根据插件配置在文章头部插入AI摘要
-     *
-     * @param string $content 原始文章内容（带标签的HTML字符串）
-     * @param Contents $widget 文章部件对象，包含自定义字段数据
-     * @return string 处理后的文章内容（可能包含前置摘要的HTML字符串）
-     * @throws Exception
-     */
-    public static function customContent(string $content, Contents $widget): string
-    {
-        $options = Options::alloc()->plugin('AIContentSummary');
-        if ($options->outputSummaryInHeader === '0') {
-            return $content;
-        }
-        $fieldName = $options->fieldName ?? 'ai_summary'; // 默认字段名称为 ai_summary
-        $excerpt = $widget->fields->$fieldName ?? null; // 获取自定义字段的内容
-
-        // 如果自定义字段中有内容，则使用该内容作为摘要
-        if (!empty($excerpt)) {
-            $result = str_replace('{summary}', $excerpt, $options->summaryTemplate);
-            $content = $result . $content;
-        }
-
-        return $content;
-    }
-
-    /**
-     * 调用 AI API 生成摘要
-     *
-     * 通过调用 AI API 生成文章摘要，支持重试机制
-     *
-     * @param string $text 文章内容
-     * @return string 生成的摘要
-     * @throws Exception
-     */
-    public static function callApi(string $text): string
-    {
-        $opt = Options::alloc()->plugin('AIContentSummary');
-
-        // 参数校验
-        if (empty($opt->modelName) || empty($opt->apiKey) || empty($opt->apiUrl)) {
-            throw new \InvalidArgumentException("插件配置为空！");
-        }
-
-        $ch = curl_init();
-        try {
-            $url = rtrim($opt->apiUrl, '/') . '/chat/completions';
-            $payload = json_encode([
-                'model' => $opt->modelName,
-                'messages' => [
-                    ['role' => 'system', 'content' => $opt->prompt],
-                    ['role' => 'user', 'content' => $text]
-                ],
-                'temperature' => 0
-            ], JSON_UNESCAPED_UNICODE);
-
-            curl_setopt_array($ch, [
-                CURLOPT_URL => $url,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $opt->apiKey],
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => $payload,
-                CURLOPT_TIMEOUT => 30,
-                CURLOPT_SSL_VERIFYPEER => false,
-                CURLOPT_SSL_VERIFYHOST => 0
-            ]);
-
-            $response = curl_exec($ch);
-            if ($response === false) {
-                throw new \RuntimeException(curl_error($ch), curl_errno($ch));
-            }
-
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            if ($httpCode !== 200) {
-                $errorInfo = json_decode($response, true);
-                throw new \RuntimeException($errorInfo['error']['message'] ?? '未知错误');
-            }
-
-            $responseData = json_decode($response, true);
-            if (!isset($responseData['choices'][0]['message']['content'])) {
-                throw new \RuntimeException("API响应错误");
-            }
-
-            return trim($responseData['choices'][0]['message']['content']);
-        } finally {
-            curl_close($ch);
-        }
     }
 }
