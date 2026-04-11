@@ -254,7 +254,7 @@ HTML,
             _t('手动填写后将优先作为文章摘要输出，同时跳过发布时的自动生成。')
         );
         // 自定义字段区域会把 textarea 放进 field-value 列，这里只需要控制输入框尺寸。
-        $field->setInputsAttribute('style', 'width:100%;height:96px;');
+        $field->input?->setAttribute('class', 'w-100');
 
         $layout->addItem($field);
     }
