@@ -77,4 +77,7 @@ API 地址带不带 `/v1` 都可以，插件会自动补全。
 
 ## 致谢
 
-原始插件由 [Rockytkg](https://github.com/Rockytkg) 开发；[Andrew8102](https://github.com/Andrew8102) 贡献了 PHP 8.4 兼容、思考型模型适配、白屏与摘要不生成修复、摘要管理面板整合与连通性测试等改进。如果这个插件帮到了你，欢迎给项目点个 Star。
+- [@Andrew8102](https://github.com/Andrew8102) 在 [PR #2](https://github.com/Rockytkg/AIContentSummary/pull/2) 中贡献了 PHP 8.4 兼容与 Kimi K2/K3 等思考型模型的 temperature / max_tokens 适配；
+- [@Andrew8102](https://github.com/Andrew8102) 在 [PR #3](https://github.com/Rockytkg/AIContentSummary/pull/3) 中贡献了摘要管理面板与正文前置摘要的整合，并修复了插件头被误判为「即插即用」的问题、清理了 1.x 遗留钩子。
+
+如果这个插件帮到了你，欢迎给项目点个 Star，也欢迎通过 Issue 反馈问题、通过 PR 提交改进。

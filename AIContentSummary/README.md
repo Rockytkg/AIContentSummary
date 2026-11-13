@@ -77,6 +77,9 @@ AIContentSummary/
 
 ## 开源协议
 
-本插件基于原版 AIContentSummary（作者 Rockytkg）修改，遵循相同许可 Apache License 2.0。
-原项目地址：<https://github.com/Rockytkg/AIContentSummary>
-修改者：Andrew8102
+[Apache License 2.0](../LICENSE)
+
+## 致谢
+
+- [@Andrew8102](https://github.com/Andrew8102) 在 [PR #3](https://github.com/Rockytkg/AIContentSummary/pull/3) 中贡献了 PHP 8.4 兼容、Kimi K2/K3 等思考型模型适配，以及摘要管理面板与正文前置摘要的整合；
+- 完整贡献者名单见根目录 [README.md](../README.md) 的致谢部分。
