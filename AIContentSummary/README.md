@@ -2,14 +2,10 @@
 
 一个用于 Typecho 的 AI 文章摘要插件：在文章发布后自动调用 AI 接口，根据正文生成摘要并保存为自定义字段，前台列表/摘要输出时优先展示该摘要；后台提供摘要管理面板，可逐条编辑、清空、生成。
 
-- **版本**：2.1.0（PHP 8.4 / 思考型模型兼容 + 吸收上游 2.0 能力）
-- **原作者**：Rockytkg（[Rockytkg/AIContentSummary](https://github.com/Rockytkg/AIContentSummary)）
-- **修改者**：Andrew8102
+- **版本**：2.1.0（PHP 8.4 兼容、思考型模型适配、摘要管理面板与正文前置摘要）
 - **兼容环境**：PHP 7.4 ~ 8.4、Typecho 1.2 / 1.3
 
-> **本目录是修改版（Fork）。** 原始项目遵循 Apache License 2.0，原项目版权归 Rockytkg 所有；
-> 本分支基于原项目修改，修改内容已在各文件头显著标注，修改部分同样以 Apache-2.0 发布。
-> 详细差异见仓库根目录的 [README.md](../README.md)。
+> 项目说明与完整文档见仓库根目录的 [README.md](../README.md)。
 
 ---
 
@@ -33,23 +29,21 @@ AIContentSummary/
 2. 后台 → 控制台 → 插件 → 启用 **AIContentSummary**；
 3. 设置 → 插件 → AIContentSummary，填写模型名、API Key、API 地址，保存后点「测试 API 连通性」。
 
-> **从 1.x 升级**：先停用插件，删除旧目录再上传新版（旧版残留的 `Action.php` 会被覆盖，无需额外处理）。
-> **从上游 2.0.0 迁移过来**：直接覆盖上传即可，配置项会自动识别上游的键名（见下表）。
+> **升级覆盖前**建议先停用插件，删除旧目录后再上传新版。
 
 ## 配置项
 
 | 界面名称 | 配置键 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| 模型名称 | `modelName` | `gpt-3.5-turbo-16k` | 也识别上游 2.0 的 `modelName` |
-| API KEY | `keyValue` | 空 | 也识别上游 2.0 的 `apiKey` |
+| 模型名称 | `modelName` | `gpt-4o-mini` | 聊天补全接口使用的模型名 |
+| API Key | `apiKey` | 空 | 调用摘要接口的密钥，表单不回显 |
 | API 地址 | `apiUrl` | 空 | 带不带 `/v1` 均可，插件自动补全 |
-| 摘要最大长度 | `maxLength` | `100` | 也识别上游的 `summaryLength` |
-| 发布时自动生成摘要 | `enableAuto` | `1` | 也识别上游的 `finishPublishSummary` |
-| 系统提示词 | `prompt` | 空（用内置） | 填写后完全替代内置提示词 |
+| 系统提示词 | `prompt` | 内置提示词 | 约束摘要风格与输出格式 |
+| 摘要字段名 | `fieldName` | `ai_summary` | 摘要保存的自定义字段名 |
+| 发布时自动生成 | `finishPublishSummary` | `0` | 仅对没有摘要的文章生效 |
+| 摘要截断长度 | `summaryLength` | `100` | 前台摘录输出的最大字符数 |
 | 正文前置摘要 | `outputSummaryInHeader` | `0` | 开启后正文顶部渲染模板 |
-| 前置摘要模板 | `summaryTemplate` | `<aside class="ai-content-summary">…</aside>` | 必须含 `{summary}` |
-
-字段名配置 `fieldName` 也一并识别，默认 `content`（与 1.x 保持一致，旧文章摘要不会失效）。
+| 摘要模板 | `summaryTemplate` | `<aside class="ai-content-summary">…</aside>` | 必须含 `{summary}` |
 
 ### 常见服务配置
 

@@ -4,12 +4,7 @@
  *
  * 该文件不依赖任何 Typecho 类，可被插件（Plugin.php）、
  * 路由版接口（Action.php）和独立接口（test.php / regen.php）共同加载。
- *
- * 2.1.0 起同时兼容两套配置键名：
- *  - 本插件历史版本：modelName / keyValue / apiUrl / maxLength / enableAuto
- *  - 上游 2.0.0   ：fieldName / summaryLength / finishPublishSummary /
- *                   outputSummaryInHeader / summaryTemplate / prompt
- * 读取统一走 cfg()，写入顺序为「历史名优先」，因此从任意方向升级都不会丢配置。
+ * 依赖 ext-mbstring 与 ext-curl（Typecho 本身同样依赖）。
  *
  * 版权与来源：基于 Rockytkg/AIContentSummary 修改，原项目版权归 Rockytkg 所有；
  * 修改者 Andrew8102，Apache-2.0。
@@ -32,61 +27,17 @@ if (!class_exists('AIContentSummary_Api')) {
         /**
          * 默认模型
          */
-        const DEFAULT_MODEL = 'gpt-3.5-turbo-16k';
+        const DEFAULT_MODEL = 'gpt-4o-mini';
 
         /**
-         * 默认摘要字段名（与 1.x 一致，勿改，否则旧文章摘要失效）
+         * 默认摘要字段名（与插件设置表单默认值一致）
          */
-        const DEFAULT_FIELD = 'content';
+        const DEFAULT_FIELD = 'ai_summary';
 
         /**
-         * 默认正文前置摘要模板（与上游 2.0 一致）
+         * 默认正文前置摘要模板
          */
         const DEFAULT_TEMPLATE = '<aside class="ai-content-summary"><strong>摘要：</strong><p>{summary}</p></aside>';
-
-        /**
-         * 配置键别名表：逻辑名 => 依优先级排列的物理键名
-         *
-         * 顺序很重要：先读本插件历史键名，再读上游 2.0 键名。
-         * 这样本站点升级不会因为上游键名为空而把已配置的模型/密钥覆盖成默认值。
-         *
-         * @var array
-         */
-        private static $aliasMap = array(
-            'model' => array('modelName'),
-            'key' => array('keyValue', 'apiKey'),
-            'apiUrl' => array('apiUrl'),
-            'maxLength' => array('maxLength', 'summaryLength'),
-            'autoGenerate' => array('enableAuto', 'finishPublishSummary'),
-            'fieldName' => array('fieldName'),
-            'outputInHeader' => array('outputSummaryInHeader'),
-            'template' => array('summaryTemplate'),
-            'prompt' => array('prompt')
-        );
-
-        /**
-         * 按逻辑名读取配置（自动处理历史键名 / 上游键名别名）
-         *
-         * @param mixed  $config
-         * @param string $logicalName 逻辑名：model/key/apiUrl/maxLength/autoGenerate/fieldName/outputInHeader/template/prompt
-         * @param string $default
-         * @return string
-         */
-        public static function cfg($config, $logicalName, $default = '')
-        {
-            $keys = isset(self::$aliasMap[$logicalName])
-                ? self::$aliasMap[$logicalName]
-                : array($logicalName);
-
-            foreach ($keys as $key) {
-                $value = self::opt($config, $key, null);
-                if ($value !== null && $value !== '') {
-                    return $value;
-                }
-            }
-
-            return $default;
-        }
 
         /**
          * 摘要字段名（去掉非法字符，兜底 content）
@@ -96,9 +47,9 @@ if (!class_exists('AIContentSummary_Api')) {
          */
         public static function fieldName($config)
         {
-            $name = trim(self::cfg($config, 'fieldName', self::DEFAULT_FIELD));
+            $name = trim((string) self::opt($config, 'fieldName', self::DEFAULT_FIELD));
 
-            // 上游 2.0 允许自定义字段名，这里做一次合法性收敛，避免拼进 SQL 出问题
+            // 做一次合法性收敛，避免拼进 SQL 出问题
             if (!preg_match('/^[_a-zA-Z][_a-zA-Z0-9]*$/', $name)) {
                 return self::DEFAULT_FIELD;
             }
@@ -114,7 +65,7 @@ if (!class_exists('AIContentSummary_Api')) {
          */
         public static function maxLength($config)
         {
-            $value = (int) self::cfg($config, 'maxLength', '100');
+            $value = (int) self::opt($config, 'summaryLength', '100');
 
             return $value > 0 ? $value : 100;
         }
@@ -180,8 +131,8 @@ if (!class_exists('AIContentSummary_Api')) {
         /**
          * 生成摘要用的系统提示词
          *
-         * 上游 2.0 允许自定义 prompt，这里两套都认：配置里有 prompt 就用它，
-         * 没有就沿用本插件历史内置的「摘要生成器」提示词，保持既有输出风格。
+         * 正常情况下配置里的 prompt 必有值（表单必填 + 默认提示词），
+         * 这里内置一份兜底，防止配置损坏时请求缺 system 消息。
          *
          * @param mixed $config
          * @param string $title   文章标题
@@ -190,7 +141,7 @@ if (!class_exists('AIContentSummary_Api')) {
          */
         public static function systemPrompt($config, $title, $maxLength)
         {
-            $custom = trim(self::cfg($config, 'prompt', ''));
+            $custom = trim((string) self::opt($config, 'prompt', ''));
             if ($custom !== '') {
                 return $custom;
             }
@@ -241,13 +192,13 @@ if (!class_exists('AIContentSummary_Api')) {
                 'maxTokens' => 0
             );
 
-            $model = trim(self::cfg($config, 'model', self::DEFAULT_MODEL));
+            $model = trim((string) self::opt($config, 'modelName', self::DEFAULT_MODEL));
             if ($model === '') {
                 $model = self::DEFAULT_MODEL;
             }
 
-            $apiKey = trim(self::cfg($config, 'key'));
-            $apiUrl = trim(self::cfg($config, 'apiUrl'));
+            $apiKey = trim((string) self::opt($config, 'apiKey'));
+            $apiUrl = trim((string) self::opt($config, 'apiUrl'));
             $maxLength = self::maxLength($config);
 
             if ($apiKey === '' || $apiUrl === '') {
@@ -587,7 +538,7 @@ if (!class_exists('AIContentSummary_Api')) {
             $text = preg_replace('/[ \t\r\n]+/', ' ', $text);
             $text = trim((string) $text);
 
-            if (function_exists('mb_strlen') && mb_strlen($text, 'UTF-8') > $limit) {
+            if (mb_strlen($text, 'UTF-8') > $limit) {
                 $text = mb_substr($text, 0, (int) $limit, 'UTF-8');
             }
 
@@ -677,7 +628,7 @@ if (!class_exists('AIContentSummary_Api')) {
                 $p = preg_replace('/^\s*(?:[#>*\-+]|\d+[.)、])\s*/u', '', $p);
                 $p = trim((string) $p);
 
-                $len = function_exists('mb_strlen') ? mb_strlen($p, 'UTF-8') : strlen($p);
+                $len = mb_strlen($p, 'UTF-8');
                 // 太短的碎片、纯英文元叙述、以冒号结尾的过渡句都跳过
                 if ($len < 12 || substr($p, -1) === ':' || substr($p, -1) === '：') {
                     continue;
@@ -723,13 +674,10 @@ if (!class_exists('AIContentSummary_Api')) {
          * @param string $str
          * @param int    $len
          * @return string
-         */        public static function cut($str, $len)
+         */
+        public static function cut($str, $len)
         {
-            $str = (string) $str;
-            if (function_exists('mb_substr')) {
-                return mb_substr($str, 0, (int) $len, 'UTF-8');
-            }
-            return substr($str, 0, (int) $len);
+            return mb_substr((string) $str, 0, (int) $len, 'UTF-8');
         }
 
         /**
@@ -816,9 +764,7 @@ if (!class_exists('AIContentSummary_Api')) {
             $errno = (int) curl_errno($ch);
             $error = $errno ? curl_error($ch) : '';
 
-            if (PHP_VERSION_ID < 80000) {
-                curl_close($ch);
-            }
+            curl_close($ch);
             unset($ch);
 
             if ($errno) {
@@ -848,9 +794,9 @@ if (!class_exists('AIContentSummary_Api')) {
          */
         public static function runTest($cfg)
         {
-            $apiUrl = trim(self::cfg($cfg, 'apiUrl'));
-            $apiKey = trim(self::cfg($cfg, 'key'));
-            $model = trim(self::cfg($cfg, 'model', self::DEFAULT_MODEL));
+            $apiUrl = trim((string) self::opt($cfg, 'apiUrl'));
+            $apiKey = trim((string) self::opt($cfg, 'apiKey'));
+            $model = trim((string) self::opt($cfg, 'modelName', self::DEFAULT_MODEL));
 
             if ($apiUrl === '' || $apiKey === '') {
                 return array(

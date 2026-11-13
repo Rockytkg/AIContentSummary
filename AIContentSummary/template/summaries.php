@@ -4,8 +4,8 @@
  *
  * 后台「摘要管理」页：列出文章与摘要，支持就地编辑 / 清空 / 单篇生成 / 批量生成。
  *
- * 相对上游 2.0 的改动：
- *  - 字段名、摘要长度统一从 Api::cfg() 读取，兼容两套配置键名；
+ * 实现说明：
+ *  - 字段名、摘要长度统一从 Api 读取（含合法性与默认值收敛）；
  *  - 分页与筛选参数收敛，避免 status/uid/keywords 组合漏传；
  *  - 请求统一带 _t 时间戳，规避 CDN / 浏览器缓存；
  *  - 批量生成逐条串行，失败只提示不中断。
@@ -32,12 +32,7 @@ include 'menu.php';
 
 $posts = \Widget\Contents\Post\Admin::alloc();
 $settings = \Widget\Options::alloc()->plugin(Plugin::NAME);
-$fieldName = class_exists('AIContentSummary_Api')
-    ? \AIContentSummary_Api::fieldName($settings)
-    : 'content';
-$summaryLength = class_exists('AIContentSummary_Api')
-    ? \AIContentSummary_Api::maxLength($settings)
-    : 100;
+$fieldName = \AIContentSummary_Api::fieldName($settings);
 
 $isAllPosts = $request->get('__typecho_all_posts') === 'on' || Cookie::get('__typecho_all_posts') === 'on';
 $panelPath = 'extending.php?panel=' . Plugin::PANEL;

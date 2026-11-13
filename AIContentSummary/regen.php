@@ -125,7 +125,10 @@ try {
     }
 
     // 令牌校验
-    $apiKey = trim(AIContentSummary_Api::cfg($cfg, 'key'));
+    $apiKey = trim((string) AIContentSummary_Api::opt($cfg, 'apiKey'));
+    if ($apiKey === '') {
+        aics_regen_respond(array('ok' => false, 'msg' => 'API KEY 为空，请先在后台保存配置后再使用补生成', 'stage' => 'config'));
+    }
     $expect = AIContentSummary_Api::token($apiKey);
     $given = isset($_POST['t']) ? (string) $_POST['t'] : '';
     if (!hash_equals($expect, $given)) {
@@ -188,6 +191,7 @@ try {
         $db->select('cid', 'title', 'text')
             ->from('table.contents')
             ->where('cid = ?', $cid)
+            ->where('type IN ?', array('post', 'post_draft'))
             ->limit(1)
     );
 

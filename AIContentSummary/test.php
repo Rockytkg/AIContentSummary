@@ -148,7 +148,7 @@ try {
     }
 
     // 令牌校验：由 API KEY 派生，外部猜不到，避免接口被陌生请求拿去刷额度
-    $apiKey = trim(AIContentSummary_Api::cfg($cfg, 'key'));
+    $apiKey = trim((string) AIContentSummary_Api::opt($cfg, 'apiKey'));
     if ($apiKey !== '') {
         $expect = AIContentSummary_Api::token($apiKey);
         $given = isset($_POST['t']) ? (string) $_POST['t'] : '';
