@@ -2,15 +2,7 @@
 declare(strict_types=1);
 
 /**
- * AIContentSummary 摘要管理面板
- *
- * 后台「摘要管理」页：列出文章与摘要，支持就地编辑 / 清空 / 单篇生成 / 批量生成。
- * 字段名与摘要长度统一从 Api 读取，请求统一带 _t 时间戳规避缓存。
- *
- * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）。
- *
- * @package AIContentSummary
- * @version 2.2.0
+ * AIContentSummary 摘要管理面板：文章摘要的就地编辑 / 清空 / 单篇与批量生成
  */
 
 use Typecho\Common;

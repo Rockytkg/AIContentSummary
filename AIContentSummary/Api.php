@@ -2,15 +2,7 @@
 declare(strict_types=1);
 
 /**
- * AIContentSummary 公共 API 逻辑
- *
- * 不依赖任何 Typecho 类，供 Plugin.php、Action.php 与独立接口（test.php / regen.php）共同加载。
- * 依赖 ext-mbstring 与 ext-curl（Typecho 本身同样依赖）。
- *
- * 环境要求：PHP 8.0+
- *
- * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）；
- * 修改者 Andrew8102，修改部分同样以 Apache-2.0 发布。
+ * AIContentSummary 公共 API 逻辑（不依赖 Typecho，供插件、后台动作与独立接口共同加载）
  */
 
 if (!class_exists('AIContentSummary_Api')) {
@@ -66,8 +58,7 @@ if (!class_exists('AIContentSummary_Api')) {
         }
 
         /**
-         * 安全读取配置值。
-         * Typecho 的 Config 值存于内部数组，需直接取值（缺失返回 null，不会抛异常）。
+         * 安全读取配置值（Typecho Config 的魔术属性需直接取值而非 isset 判断）
          */
         public static function opt(mixed $config, string $name, string $default = ''): string
         {
@@ -114,9 +105,8 @@ if (!class_exists('AIContentSummary_Api')) {
 
         /**
          * 一次性生成摘要（截断放大重试 + 推理内容兜底）。
-         * 发布钩子、后台手动生成、regen.php 统一走这里，保证行为一致。
+         * 发布钩子、后台手动生成、regen.php 统一走此入口以保证行为一致。
          *
-         * @param mixed  $config 插件配置（Config 对象或数组）
          * @return array{ok:bool,summary:string,msg:string,detail:string,cost:int,finish:string,maxTokens:int}
          */
         public static function generateSummary(mixed $config, string $title, string $text, int $timeout = 60): array
@@ -245,9 +235,8 @@ if (!class_exists('AIContentSummary_Api')) {
         }
 
         /**
-         * 该模型是否「只接受默认 temperature」。
-         * Kimi 新模型、思考型模型、OpenAI o 系与 gpt-5 系不接受自定义采样温度，
-         * 传 temperature=0 会被直接 400 拒绝，这类模型一律不传。
+         * 该模型是否「只接受默认 temperature」：Kimi 新模型、思考型模型与
+         * OpenAI o 系 / gpt-5 系传自定义温度会被 400 拒绝，一律不传。
          */
         public static function isFixedTemperature(string $model): bool
         {
@@ -266,9 +255,8 @@ if (!class_exists('AIContentSummary_Api')) {
         }
 
         /**
-         * 是否为「先推理、再作答」的思考型模型。
-         * 这类模型会把大量 token 花在 reasoning 上，max_tokens 给小了
-         * 正文会变成空字符串、finish_reason=length。
+         * 是否为「先推理、再作答」的思考型模型：
+         * 推理会消耗大量 max_tokens，预算不足时正文为空、finish_reason=length。
          */
         public static function isThinkingModel(string $model): bool
         {
@@ -363,8 +351,7 @@ if (!class_exists('AIContentSummary_Api')) {
         }
 
         /**
-         * 清洗正文：去掉 markdown 标记、HTML 标签与多余空白，并限制长度。
-         * 不用 /u 修饰符，避免非法 UTF-8 导致 preg_replace 返回 null。
+         * 清洗正文：去掉 markdown/HTML 标记与多余空白，并限制长度
          */
         public static function prepareText(string $text, int $limit = 8000): string
         {
@@ -375,7 +362,7 @@ if (!class_exists('AIContentSummary_Api')) {
             $text = strip_tags($text);
             $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
 
-            // &nbsp; 与全角空格解码后统一成普通空格
+            // &nbsp; 与全角空格统一成普通空格；不用 /u，避免非法 UTF-8 让 preg_replace 返回 null
             $text = str_replace(array("\xC2\xA0", "\xE3\x80\x80"), ' ', $text);
             $text = trim((string) preg_replace('/[ \t\r\n]+/', ' ', $text));
 
@@ -415,10 +402,8 @@ if (!class_exists('AIContentSummary_Api')) {
         }
 
         /**
-         * 从推理残留文字里保守提取可用摘要（最后兜底）。
-         * 思考型模型预算被推理吃光时正文为空，但 reasoning_content 里
-         * 往往已经复述了文章要点；提取失败时返回空串。
-         * 只拦「我要做什么」这类指令叙述句，不拦「这篇文章……」等正常摘要开头。
+         * 从推理残留文字里保守提取可用摘要（最后兜底，失败返回空串）：
+         * 思考型模型预算被推理吃光时正文为空，reasoning 里往往已复述文章要点。
          */
         public static function extractFromReasoning(string $reasoning, int $maxLength = 100): string
         {
@@ -436,6 +421,7 @@ if (!class_exists('AIContentSummary_Api')) {
                 return '';
             }
 
+            // 只拦指令叙述句，不拦「这篇文章……」等正常摘要开头
             $banned = '/^(the user|user|i |i\'?ll|i will|let me|let\'s|first,|first |step \d|okay|ok,|'
                 . 'sure|here|we |we\'?ll|now |next,|开始|首先|用户|我需要|我将|让我|好的|现在)/iu';
 
@@ -497,8 +483,8 @@ if (!class_exists('AIContentSummary_Api')) {
         }
 
         /**
-         * 统一的 curl POST：固定校验上游证书；禁止跟随重定向（CURLOPT_HTTPHEADER 会在
-         * 重定向间重发，避免 Authorization 头被带到外部域名）；上游 3xx 视为异常返回。
+         * 统一的 curl POST：固定校验上游证书；不跟随重定向，
+         * 避免 Authorization 头随 3xx 跨域重发。
          *
          * @return array{success:bool,httpCode:int,body:string,error:string,errno:int}
          */
@@ -559,8 +545,6 @@ if (!class_exists('AIContentSummary_Api')) {
 
         /**
          * 执行一次连通性测试，返回可直接 JSON 化的结果
-         *
-         * @param mixed $cfg 插件配置（数组）
          */
         public static function runTest(mixed $cfg): array
         {

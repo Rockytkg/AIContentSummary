@@ -2,15 +2,9 @@
 declare(strict_types=1);
 
 /**
- * AIContentSummary 连通性测试接口（独立文件，不经 Typecho 路由）
- *
- * 后台「测试 API 连通性」按钮的落点，也可直接访问该地址使用；仅接受 POST，始终返回 JSON。
- * 做成独立文件是因为 Typecho 路由表存在数据库中，插件升级后旧路由不会自动清理；
- * 该文件不依赖路由表与插件启用状态，上传即可用。
- *
- * 身份校验：令牌由 API KEY 派生（sha1 前 24 位），未持令牌的请求一概拒绝。
- *
- * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）。
+ * AIContentSummary 连通性测试接口。
+ * 独立文件不经 Typecho 路由（路由表存库，插件升级后旧路由不会自动清理），上传即可用；
+ * 仅接受 POST，始终返回 JSON。
  */
 
 @ini_set('display_errors', '0');
@@ -27,8 +21,7 @@ if (!headers_sent()) {
 $GLOBALS['__aics_done'] = false;
 
 /**
- * 输出 JSON 并结束。统一 HTTP 200（nginx 的 error_page 会把 4xx/5xx
- * 的 body 换成 HTML 错误页），成功与否看 JSON 里的 ok 字段。
+ * 输出 JSON 并结束（统一 HTTP 200：成败看 ok 字段，避免 nginx error_page 换掉 4xx/5xx 响应体）
  */
 function aics_respond(array $data, int $status = 200): void
 {
@@ -133,7 +126,7 @@ try {
         aics_respond(array('ok' => false, 'msg' => '插件配置无法解析（不是合法的序列化数据）', 'stage' => 'config'));
     }
 
-    // 令牌由 API KEY 派生，外部无法猜测，避免接口被陌生请求占用额度
+    // 令牌由 API KEY 派生（sha1 前 24 位），外部无法猜测，避免接口被陌生请求占用额度
     $apiKey = trim(AIContentSummary_Api::opt($cfg, 'apiKey'));
     if ($apiKey === '') {
         aics_respond(array(

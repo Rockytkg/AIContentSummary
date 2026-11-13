@@ -2,16 +2,12 @@
 declare(strict_types=1);
 
 /**
- * AIContentSummary：调用 AI 接口，依据文章正文生成摘要并写入自定义字段
- *
- * 环境要求：Typecho 1.3+，PHP 8.0+（ext-curl、ext-mbstring）
+ * 通过 AI 接口依据文章内容生成摘要并写入自定义字段
  *
  * @package AIContentSummary
  * @author Rockytkg, Andrew8102
  * @version 2.2.0
  * @link https://github.com/Rockytkg/AIContentSummary
- *
- * 版权与来源：原项目由 Rockytkg 开发，修改部分同样以 Apache License 2.0 发布。
  */
 
 namespace TypechoPlugin\AIContentSummary;
@@ -43,18 +39,23 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
 require_once __DIR__ . '/Api.php';
 
 /**
- * 插件主体。
- * 必须以 implements 实现 PluginInterface：Typecho 的 parseInfo() 依赖
- * T_IMPLEMENTS 识别 activate/config 等入口，写成 extends 会被当作即插即用插件。
+ * 插件主体。必须 implements PluginInterface：parseInfo() 依赖 T_IMPLEMENTS
+ * 识别 activate/config 等入口，继承式声明会被当作「即插即用」插件。
  */
 final class Plugin implements PluginInterface
 {
     public const NAME = 'AIContentSummary';
+
+    /** 后台面板模板（相对插件目录） */
     public const PANEL = 'AIContentSummary/template/summaries.php';
+
+    /** 后台动作名 */
     public const ACTION = 'summaries';
+
+    /** 日志文件（位于插件目录） */
     public const LOG_FILE = 'debug.log';
 
-    /** 摘要内容缓存（键为 cid，仅限单次请求内），避免 excerptEx/contentEx 高频触发时逐行查询 fields 表 */
+    /** 请求内摘要缓存（cid => summary），减少列表页对 fields 表的重复查询 */
     private static array $summaryCache = [];
 
     /**
@@ -209,10 +210,8 @@ HTML,
         );
 
         /*
-         * 设置页附加工具。
-         * test.php / regen.php 是不经 Typecho 路由的独立文件：只取 path，让浏览器以当前后台页面
-         * 同源发起请求，规避 CORS 与混合内容问题；令牌由 API KEY 派生（sha1 前 24 位），
-         * 防止接口被陌生请求占用额度。
+         * test.php / regen.php 为不经路由的独立文件，只取 path 让浏览器同源请求，
+         * 规避 CORS 与混合内容；令牌由 API KEY 派生，防止接口被陌生请求占用额度。
          */
         $testPath = Common::url(self::NAME . '/test.php', Helper::options()->pluginUrl);
         $regenPath = Common::url(self::NAME . '/regen.php', Helper::options()->pluginUrl);
@@ -452,7 +451,7 @@ HTML;
             $maxLength = 100;
         }
 
-        // Common::subStr 截断时自带「...」后缀，不要重复拼接
+        // Common::subStr 截断后自带「...」后缀
         if (Common::strLen($summary) > $maxLength) {
             $summary = Common::subStr($summary, 0, $maxLength);
         }
@@ -486,9 +485,8 @@ HTML;
     }
 
     /**
-     * 发布完成后按需生成摘要。钩子在「发布成功之后、跳转之前」执行：
-     * 任何失败只能记日志、弹后台提示，阻塞或中断会让后台跳过
-     * Notice 与 redirect，表现为保存白屏。
+     * 发布完成后按需生成摘要。该钩子在跳转前执行，任何失败只能记日志、
+     * 弹后台提示，阻塞或中断会跳过 Notice 与 redirect，表现为保存白屏。
      */
     public static function finishPublish(array $contents, mixed $editor): void
     {
@@ -512,7 +510,7 @@ HTML;
                 return;
             }
 
-            // 已有摘要直接跳过：不重复消耗额度，也不覆盖手工修订
+            // 有摘要则跳过：避免重复扣费或覆盖手工修订
             if (self::getSummary($cid) !== '') {
                 self::log('跳过生成：cid=' . $cid . ' 已有摘要，不再调用接口');
                 return;
@@ -527,7 +525,7 @@ HTML;
             );
 
             if (!$result['ok']) {
-                // 日志只记录结论；上游响应体可能包含任意文本（Notice 不转义），展示前先转义
+                // 日志只记结论；上游响应体可能含任意文本，Notice 展示前先转义
                 self::log('生成失败：cid=' . $cid . ' ' . $result['msg']);
                 self::notice(
                     'AI 摘要生成失败：' . $result['msg']

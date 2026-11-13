@@ -2,12 +2,9 @@
 declare(strict_types=1);
 
 /**
- * AIContentSummary 补生成接口（独立文件，不经 Typecho 路由）
- *
- * 为没有摘要的历史文章补生成，或手动重跑某一篇。仅接受 POST，始终返回 JSON。
- * 参数：t = 由 API KEY 派生的令牌（必填）；cid = 指定文章 id，不传则返回待补生成列表。
- *
- * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）。
+ * AIContentSummary 补生成接口（独立文件，不经 Typecho 路由）。
+ * 为没有摘要的历史文章补生成或手动重跑某一篇；仅接受 POST，始终返回 JSON。
+ * 参数：t = 由 API KEY 派生的令牌（必填）；cid = 文章 id，不传则返回待补生成列表。
  */
 
 @ini_set('display_errors', '0');
@@ -114,7 +111,7 @@ try {
         aics_regen_respond(array('ok' => false, 'msg' => '插件配置无法解析', 'stage' => 'config'));
     }
 
-    // 令牌由 API KEY 派生，外部无法猜测，避免接口被陌生请求占用额度
+    // 令牌由 API KEY 派生（sha1 前 24 位），外部无法猜测，避免接口被陌生请求占用额度
     $apiKey = trim(AIContentSummary_Api::opt($cfg, 'apiKey'));
     if ($apiKey === '') {
         aics_regen_respond(array('ok' => false, 'msg' => 'API KEY 为空，请先在后台保存配置后再使用补生成', 'stage' => 'config'));

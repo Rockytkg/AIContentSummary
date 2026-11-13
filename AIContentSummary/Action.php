@@ -2,14 +2,7 @@
 declare(strict_types=1);
 
 /**
- * AIContentSummary 摘要管理动作
- *
- * 后台「摘要管理」面板的接口层：生成 / 保存 / 清空。仅接受管理员 POST，统一返回 JSON。
- * 生成逻辑统一走 Api::generateSummary()，与发布钩子、独立接口行为一致。
- *
- * 环境要求：Typecho 1.3+，PHP 8.0+
- *
- * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）。
+ * AIContentSummary 摘要管理动作（生成 / 保存 / 清空，仅管理员 POST，统一返回 JSON）
  */
 
 namespace TypechoPlugin\AIContentSummary;
