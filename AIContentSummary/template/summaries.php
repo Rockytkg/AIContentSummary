@@ -1,4 +1,21 @@
 <?php
+/**
+ * AIContentSummary 摘要管理面板
+ *
+ * 后台「摘要管理」页：列出文章与摘要，支持就地编辑 / 清空 / 单篇生成 / 批量生成。
+ *
+ * 实现说明：
+ *  - 字段名、摘要长度统一从 Api 读取（含合法性与默认值收敛）；
+ *  - 分页与筛选参数收敛，避免 status/uid/keywords 组合漏传；
+ *  - 请求统一带 _t 时间戳，规避 CDN / 浏览器缓存；
+ *  - 批量生成逐条串行，失败只提示不中断。
+ *
+ * 版权与来源：基于 Rockytkg/AIContentSummary 修改，原项目版权归 Rockytkg 所有；
+ * 修改者 Andrew8102，Apache-2.0。
+ *
+ * @package AIContentSummary
+ * @version 2.1.0
+ */
 
 use Typecho\Common;
 use Typecho\Cookie;
@@ -15,26 +32,31 @@ include 'menu.php';
 
 $posts = \Widget\Contents\Post\Admin::alloc();
 $settings = \Widget\Options::alloc()->plugin(Plugin::NAME);
-$fieldName = $settings->fieldName;
-$isAllPosts = $request->get('__typecho_all_posts') === 'on' || Cookie::get('__typecho_all_posts') === 'on';
-$panelBase = 'extending.php?panel=AIContentSummary/template/summaries.php';
-$actionBase = $security->getIndex('/action/summaries');
+$fieldName = \AIContentSummary_Api::fieldName($settings);
 
-$statusTabs = [
-    ['value' => 'all', 'label' => _t('可用')],
-    ['value' => 'waiting', 'label' => _t('待审核')],
-    ['value' => 'draft', 'label' => _t('草稿')],
-];
+$isAllPosts = $request->get('__typecho_all_posts') === 'on' || Cookie::get('__typecho_all_posts') === 'on';
+$panelPath = 'extending.php?panel=' . Plugin::PANEL;
+$actionBase = $security->getIndex('/action/' . Plugin::ACTION);
+
+$statusTabs = array(
+    array('value' => 'all', 'label' => _t('可用')),
+    array('value' => 'waiting', 'label' => _t('待审核')),
+    array('value' => 'draft', 'label' => _t('草稿')),
+);
 
 $currentStatus = (string) $request->get('status', 'all');
-$currentStatus = in_array($currentStatus, ['all', 'waiting', 'draft'], true) ? $currentStatus : 'all';
+if (!in_array($currentStatus, array('all', 'waiting', 'draft'), true)) {
+    $currentStatus = 'all';
+}
 
-// 统一组装当前面板链接，避免切换筛选条件时手写 query。
-$buildPanelUrl = static function (array $query = []) use ($options, $panelBase): string {
-    $query = array_filter($query, static fn ($value): bool => $value !== null && $value !== '');
+// 统一组装当前面板链接，避免切换筛选条件时手写 query
+$buildPanelUrl = static function (array $query = array()) use ($options, $panelPath): string {
+    $query = array_filter($query, static function ($value): bool {
+        return $value !== null && $value !== '';
+    });
     $suffix = $query ? '&' . http_build_query($query) : '';
 
-    return $options->adminUrl($panelBase . $suffix, true);
+    return $options->adminUrl($panelPath . $suffix, true);
 };
 ?>
 
@@ -102,10 +124,10 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
                             $statusValue = $tab['value'] === 'all' ? null : $tab['value'];
                             ?>
                             <li<?php if ($isCurrent): ?> class="current"<?php endif; ?>>
-                                <a href="<?php echo htmlspecialchars($buildPanelUrl([
+                                <a href="<?php echo htmlspecialchars($buildPanelUrl(array(
                                     'status' => $statusValue,
                                     'uid' => isset($request->uid) ? $request->filter('encode')->uid : null,
-                                ]), ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($tab['label'], ENT_QUOTES, 'UTF-8'); ?></a>
+                                )), ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($tab['label'], ENT_QUOTES, 'UTF-8'); ?></a>
                             </li>
                         <?php endforeach; ?>
                     </ul>
@@ -134,10 +156,10 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
                     </div>
                     <div class="search" role="search">
                         <?php if ($request->keywords || $request->category): ?>
-                            <a href="<?php echo htmlspecialchars($buildPanelUrl([
+                            <a href="<?php echo htmlspecialchars($buildPanelUrl(array(
                                 'status' => $currentStatus === 'all' ? null : $currentStatus,
                                 'uid' => isset($request->uid) ? $request->filter('encode')->uid : null,
-                            ]), ENT_QUOTES, 'UTF-8'); ?>"><?php _e('&laquo; 取消筛选'); ?></a>
+                            )), ENT_QUOTES, 'UTF-8'); ?>"><?php _e('&laquo; 取消筛选'); ?></a>
                         <?php endif; ?>
                         <input type="text" class="text-s" placeholder="<?php _e('请输入关键字'); ?>" value="<?php echo htmlspecialchars((string) $request->filter('html')->keywords, ENT_QUOTES, 'UTF-8'); ?>" name="keywords"/>
                         <select name="category">
@@ -148,7 +170,7 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
                             <?php endwhile; ?>
                         </select>
                         <button type="submit" class="btn btn-s"><?php _e('筛选'); ?></button>
-                        <input type="hidden" name="panel" value="AIContentSummary/template/summaries.php"/>
+                        <input type="hidden" name="panel" value="<?php echo htmlspecialchars(Plugin::PANEL, ENT_QUOTES, 'UTF-8'); ?>"/>
                         <?php if (isset($request->uid)): ?>
                             <input type="hidden" name="uid" value="<?php echo htmlspecialchars((string) $request->filter('html')->uid, ENT_QUOTES, 'UTF-8'); ?>"/>
                         <?php endif; ?>
@@ -178,9 +200,14 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
                         <?php if ($posts->have()): ?>
                             <?php while ($posts->next()): ?>
                                 <?php
-                                $summary = trim((string) ($posts->fields->{$fieldName} ?? ''));
+                                $summary = '';
+                                try {
+                                    $summary = trim((string) ($posts->fields->{$fieldName} ?? ''));
+                                } catch (\Throwable $e) {
+                                    $summary = '';
+                                }
                                 $title = (string) $posts->title;
-                                $summaryLength = Common::strLen($summary);
+                                $summaryLen = Common::strLen($summary);
                                 ?>
                                 <tr id="post-<?php $posts->cid(); ?>" data-cid="<?php $posts->cid(); ?>">
                                     <td class="kit-hidden-mb"><input type="checkbox" value="<?php $posts->cid(); ?>" name="cid[]"/></td>
@@ -213,7 +240,7 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
                                                 <button type="button" class="btn btn-s js-clear-summary"><?php _e('清空'); ?></button>
                                                 <button type="button" class="btn btn-s js-cancel-summary"><?php _e('取消'); ?></button>
                                             </div>
-                                            <div class="summary-meta"><?php _e('字数'); ?>：<span class="summary-length"><?php echo $summaryLength; ?></span></div>
+                                            <div class="summary-meta"><?php _e('字数'); ?>：<span class="summary-length"><?php echo $summaryLen; ?></span></div>
                                         </div>
                                     </td>
                                     <td>
@@ -258,17 +285,19 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
         var $batchButton = $('.js-generate-summary-batch');
         var batchRunning = false;
 
-        // 只复用 Typecho 的选择能力，不接管动作链接，避免干扰当前页的自定义按钮事件。
-        $('.typecho-list-table').tableSelectable({
+        // 只复用 Typecho 的选择能力，不接管动作链接，避免干扰当前页的自定义按钮事件
+        $table.tableSelectable({
             checkEl: 'input[name="cid[]"]',
             rowEl: 'tbody tr[data-cid]',
             selectAllEl: '.typecho-table-select-all'
         });
 
-        $('.btn-drop').dropdownMenu({
-            btnEl: '.dropdown-toggle',
-            menuEl: '.dropdown-menu'
-        });
+        if ($.fn.dropdownMenu) {
+            $('.btn-drop').dropdownMenu({
+                btnEl: '.dropdown-toggle',
+                menuEl: '.dropdown-menu'
+            });
+        }
 
         function notice(message, type) {
             var $notice = $('<div class="message popup ' + (type || 'success') + '" style="display:none;"><ul><li></li></ul></div>');
@@ -310,7 +339,7 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
             var summary = $.trim(data && data.summary ? data.summary : '');
             var $cell = cellOf($row).removeClass('summary-editing');
 
-            // data-summary 保存“真实值”，取消编辑时不依赖展示文案反推内容。
+            // data-summary 保存“真实值”，取消编辑时不依赖展示文案反推内容
             $cell.attr('data-summary', summary);
             $cell.find('.summary-display').text(summary || emptyText);
             resetEditor($cell);
@@ -334,7 +363,7 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
 
         function request(action, data) {
             return $.ajax({
-                url: actionUrl + actionJoiner + 'do=' + encodeURIComponent(action),
+                url: actionUrl + actionJoiner + 'do=' + encodeURIComponent(action) + '&_t=' + Date.now(),
                 type: 'POST',
                 data: data,
                 dataType: 'json'
@@ -410,7 +439,7 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
             runAction('generate', $row, {cid: $row.data('cid')}, '摘要生成成功');
         });
 
-        // 点击空白区域时关闭其它编辑器，保持单行编辑体验。
+        // 点击空白区域时关闭其它编辑器，保持单行编辑体验
         $(document).on('click', function (event) {
             if (!$(event.target).closest('.summary-cell').length) {
                 closeEditors();
@@ -430,7 +459,7 @@ $buildPanelUrl = static function (array $query = []) use ($options, $panelBase):
             $row = $rows.eq(index);
             toggleBusy($row, true);
 
-            // 批量生成按顺序串行执行，减少接口并发带来的限流和提示混乱。
+            // 批量生成按顺序串行执行，减少接口并发带来的限流和提示混乱
             request('generate', {cid: $row.data('cid')}).done(function (response) {
                 if (response && response.success) {
                     syncRow($row, response.data || {});

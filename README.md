@@ -1,34 +1,74 @@
 # AIContentSummary
 
-AIContentSummary 是一个用于通过调用AI接口，根据文章内容生成摘要的 Typecho 插件。
+AIContentSummary 是一个用于通过调用 AI 接口，根据文章内容生成摘要的 Typecho 插件。
 
-## 功能介绍
+## 功能
 
-AIContentSummary 插件具有以下功能：
+- 发布文章时自动调用 AI 生成摘要，写入文章自定义字段（默认 `ai_summary`）
+- 后台「摘要管理」面板：查看全部文章摘要、就地编辑 / 清空 / 单篇生成 / 勾选批量生成（串行防限流）
+- 正文前置摘要（可选）：按模板把摘要渲染到正文顶部，`{summary}` 占位符 + HTML 转义
+- 自定义系统提示词、摘要字段名与截断长度
+- 编辑页「AI 摘要」字段（管理员可见）：手动填写后跳过自动生成
+- 设置页一键「测试 API 连通性」，失败时指出卡在哪一步（配置 / 网络 / 接口 / 令牌）
+- 「扫描并补生成」：为没有摘要的历史文章批量补生成
+- 关键节点写入 `usr/plugins/AIContentSummary/debug.log`，便于排查
 
-1. 根据文章内容智能生成摘要
-2. 提高博客首页和分类归档页面的阅读体验
-3. 节省博主手动编写摘要的时间和精力
+## 环境要求
 
-## 安装方法
+- Typecho >= 1.2，PHP 7.4 ~ 8.4（依赖 ext-curl 与 ext-mbstring）
 
-typecho版本 >= 1.2
+## 兼容性修复（2.1.0）
 
-1. 下载插件：[下载地址](https://github.com/Rockytkg/AIContentSummary/releases)
-2. 将下载的插件文件解压并上传至 Typecho 插件目录
-3. 登录 Typecho 后台，进入插件管理页面，启用 AIContentSummary 插件
-4. 根据提示配置插件参数
+| 问题 | 现象 | 处理 |
+| --- | --- | --- |
+| temperature 被拒 | `400 invalid temperature: only 1 is allowed for this model` | 按模型判断：Kimi/Moonshot、OpenAI o 系、gpt-5 系等不传自定义温度，并带自动回退 |
+| 思考型模型无正文 | `模型没有返回正文（finish_reason=length）` | 按模型给足推理预算（4096~32768），被截断自动放大重试，仍失败时从 `reasoning_content` 保守提取草稿 |
+| 保存文章白屏 | 后台空白页、无「已经发布」提示 | 发布钩子内不再调用 `fastcgi_finish_request()`，并整体包 try/catch，异常只写日志 |
+| 从不生成摘要 | 发布后一直没有摘要 | 不再用 `isset($obj->cid)` 判断 Typecho 魔术属性（恒为 false），改为直接取值 |
+| PHP 8.4 报错 | 除零、`array_key_exists(false)`、隐式可空参数等 | 已适配 PHP 8.x |
+
+## 安装
+
+1. 从 [Releases](https://github.com/Rockytkg/AIContentSummary/releases) 下载插件压缩包
+2. 解压得到 `AIContentSummary/` 目录，**整个目录**上传到 `usr/plugins/`
+3. 后台 → 控制台 → 插件 → 启用 AIContentSummary
+4. 进入插件设置，填写模型名、API Key、API 地址，点「保存设置」后点「测试 API 连通性」
+
+> **升级覆盖前**建议先停用插件；务必删除旧目录后再上传新版，避免残留旧文件。
+
+### 配置示例
+
+| 服务 | API 地址 | 模型名 |
+| --- | --- | --- |
+| Kimi | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+
+API 地址带不带 `/v1` 都可以，插件会自动补全。
+
+**建议用非思考型模型生成摘要**：摘要任务不需要推理，`deepseek-chat` 通常 1~3 秒返回；`kimi-k3` 这类思考型模型会先推理几千字，慢且贵（虽然插件已做兼容）。
 
 ## 使用方法
 
-1. 编写文章时，无需手动填写摘要
-2. 发布文章后，插件会自动根据文章内容生成摘要
-3. 在博客首页和分类归档页面查看生成的摘要
+1. 开启「发布时自动生成」后，发布文章自动生成摘要；已有摘要的文章不会重复调用接口
+2. **后台「摘要管理」面板**：查看全部文章摘要，点摘要文字就地编辑；也可单篇生成或勾选后批量生成
+3. 想让某篇文章重新生成：在管理面板点「生成摘要」，或清空摘要字段再保存
+4. 开启「正文前置摘要」可在正文顶部渲染摘要（默认关闭）
+5. 前端输出参考：`<?php $this->fields->ai_summary(); ?>`
 
-## 注意事项
+## 排查问题
 
-在保存文章时，请不要刷新网页。因为提交文章时会调用API接口等待返回，刷新网页可能导致摘要生成失败。
+插件目录下的 `debug.log` 会记录每个关键节点：
 
-## 免费插件，欢迎 Star
+```
+[2025-01-01 10:20:01] 跳过生成：cid=128 已有摘要，不再调用接口
+[2025-01-01 10:21:12] 生成成功：cid=130 摘要长度=96
+```
 
-AIContentSummary 插件完全免费。如果这个插件帮助到了您，请帮作者点个 Star，感谢您的支持！
+## 许可证
+
+[Apache License 2.0](LICENSE)
+
+## 致谢
+
+原始插件由 [Rockytkg](https://github.com/Rockytkg) 开发；[Andrew8102](https://github.com/Andrew8102) 贡献了 PHP 8.4 兼容、思考型模型适配、白屏与摘要不生成修复、摘要管理面板整合与连通性测试等改进。如果这个插件帮到了你，欢迎给项目点个 Star。
