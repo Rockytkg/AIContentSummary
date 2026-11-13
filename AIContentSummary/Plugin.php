@@ -6,7 +6,7 @@ declare(strict_types=1);
  *
  * @package AIContentSummary
  * @author Rockytkg, Andrew8102
- * @version 2.2.1
+ * @version 2.2.2
  * @link https://github.com/Rockytkg/AIContentSummary
  */
 
@@ -52,8 +52,8 @@ final class Plugin implements PluginInterface
     /** 后台动作名 */
     public const ACTION = 'summaries';
 
-    /** 日志文件（位于插件目录） */
-    public const LOG_FILE = 'debug.log';
+    /** 日志文件（位于插件目录，带 PHP 守卫头，避免被 Web 直接读取） */
+    public const LOG_FILE = 'debug.log.php';
 
     /** 请求内摘要缓存（cid => summary），减少列表页对 fields 表的重复查询 */
     private static array $summaryCache = [];
@@ -97,8 +97,8 @@ final class Plugin implements PluginInterface
                 null,
                 AIContentSummary_Api::DEFAULT_MODEL,
                 _t('模型名称'),
-                _t('聊天补全接口使用的模型名，默认 deepseek-chat。<br>'
-                    . 'DeepSeek：deepseek-chat / deepseek-reasoner（用默认地址即可）；'
+                _t('聊天补全接口使用的模型名，默认 deepseek-flash。<br>'
+                    . 'DeepSeek：deepseek-flash / deepseek-chat / deepseek-reasoner（用默认地址即可）；'
                     . 'Kimi / Moonshot：kimi-k3.1-pro、kimi-k3、kimi-k2.6（地址填 https://api.moonshot.cn/v1）；'
                     . 'OpenAI：gpt-4o-mini。思考型模型只接受 temperature=1，插件已自动适配。')
             )
@@ -211,21 +211,22 @@ HTML,
         );
 
         /*
-         * test.php / regen.php 为不经路由的独立文件，只取 path 让浏览器同源请求，
-         * 规避 CORS 与混合内容；令牌由 API KEY 派生，防止接口被陌生请求占用额度。
+         * test.php / regen.php 为不经路由的独立文件，只取 path 让浏览器同源请求，规避 CORS 与混合内容。
+         * 鉴权使用管理员登录态 + Typecho 原生 CSRF 令牌（绑定当前页地址），不再使用长期有效的派生令牌；
+         * 仅在插件设置页的 GET 请求下输出，避免保存设置时在重定向前产生输出。
          */
+        $request = \Typecho\Request::getInstance();
+        if (!$request->isGet() || $request->get('config') !== self::NAME) {
+            return;
+        }
+
         $testPath = Common::url(self::NAME . '/test.php', Helper::options()->pluginUrl);
         $regenPath = Common::url(self::NAME . '/regen.php', Helper::options()->pluginUrl);
 
-        try {
-            $apiKey = AIContentSummary_Api::opt(Options::alloc()->plugin(self::NAME), 'apiKey');
-        } catch (\Throwable) {
-            $apiKey = '';
-        }
-
-        $testPathJson = json_encode(parse_url($testPath, PHP_URL_PATH) ?: '/usr/plugins/' . self::NAME . '/test.php', JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        $regenPathJson = json_encode(parse_url($regenPath, PHP_URL_PATH) ?: '/usr/plugins/' . self::NAME . '/regen.php', JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        $tokenJson = json_encode(AIContentSummary_Api::token($apiKey));
+        $jsonFlags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+        $testPathJson = json_encode(parse_url($testPath, PHP_URL_PATH) ?: '/usr/plugins/' . self::NAME . '/test.php', $jsonFlags);
+        $regenPathJson = json_encode(parse_url($regenPath, PHP_URL_PATH) ?: '/usr/plugins/' . self::NAME . '/regen.php', $jsonFlags);
+        $csrfJson = json_encode(\Widget\Security::alloc()->getToken($request->getRequestUrl()), $jsonFlags);
 
         echo <<<HTML
 <div style="padding:12px 0;border-top:1px dashed #ddd;margin-top:15px;">
@@ -245,14 +246,14 @@ HTML,
     <div id="ai-regen-log" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid #e3e3e3;border-radius:4px;font-size:12px;line-height:1.7;max-height:220px;overflow:auto;background:#fafafa;"></div>
     <p style="color:#888;font-size:12px;margin-top:8px;">
         只处理「已发布且没有摘要字段」的文章，逐篇串行调用接口，页面保持打开即可。<br>
-        生成结果同时写入 <code>usr/plugins/AIContentSummary/debug.log</code>，排查问题时可直接看这个文件。
+        生成结果同时写入 <code>usr/plugins/AIContentSummary/debug.log.php</code>，排查问题时可直接看这个文件（带 PHP 守卫头，不会被公网访问到）。
     </p>
 </div>
 <script>
 (function () {
     var PATH = {$testPathJson};
     var REGEN = {$regenPathJson};
-    var TOKEN = {$tokenJson};
+    var TOKEN = {$csrfJson};
     var btn = document.getElementById('ai-test-btn');
     var loading = document.getElementById('ai-test-loading');
     var box = document.getElementById('ai-test-result');
@@ -307,7 +308,7 @@ HTML,
             credentials: 'same-origin',
             cache: 'no-store',
             headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
-            body: 't=' + encodeURIComponent(TOKEN)
+            body: '_=' + encodeURIComponent(TOKEN)
         }).then(function (resp) {
             return resp.text().then(function (text) {
                 return {status: resp.status, text: text};
@@ -370,7 +371,7 @@ HTML,
             regenLog.innerHTML = '';
             regenStatus.textContent = '正在扫描...';
 
-            postRegen('t=' + encodeURIComponent(TOKEN)).then(function (data) {
+            postRegen('_=' + encodeURIComponent(TOKEN)).then(function (data) {
                 if (!data.ok) {
                     regenStatus.textContent = '扫描失败';
                     regenSay(esc(data.msg || '未知错误'), '#8a2222');
@@ -400,7 +401,7 @@ HTML,
                     var item = list[i];
                     regenStatus.textContent = '处理中 ' + (i + 1) + '/' + list.length + '：' + item.title;
 
-                    postRegen('t=' + encodeURIComponent(TOKEN) + '&cid=' + item.cid).then(function (r) {
+                    postRegen('_=' + encodeURIComponent(TOKEN) + '&cid=' + item.cid).then(function (r) {
                         if (r.ok) {
                             done++;
                             regenSay('✔ ' + esc(item.title) + '（' + esc(r.cost || '') + '）', '#1f5b2b');
@@ -439,8 +440,9 @@ HTML;
     /**
      * 存在 AI 摘要时优先输出摘要作为 excerpt。
      */
-    public static function excerpt(string $excerpt, Contents $widget): string
+    public static function excerpt(?string $excerpt, Contents $widget): string
     {
+        $excerpt = (string) $excerpt;
         $summary = self::postSummary($widget);
         if ($summary === '') {
             return $excerpt;
@@ -457,14 +459,17 @@ HTML;
             $summary = Common::subStr($summary, 0, $maxLength);
         }
 
-        return $summary;
+        // 摘要为纯文本（可能来自模型输出）：先截断再转义，避免截断实体与存储型 XSS
+        return htmlspecialchars($summary, ENT_QUOTES, 'UTF-8');
     }
 
     /**
      * 按配置把摘要插入正文顶部（默认关闭）。
      */
-    public static function content(string $content, Contents $widget): string
+    public static function content(?string $content, Contents $widget): string
     {
+        $content = (string) $content;
+
         try {
             $settings = self::settings();
 
@@ -680,11 +685,15 @@ HTML;
     public static function log(string $message): void
     {
         try {
-            @file_put_contents(
-                __DIR__ . '/' . self::LOG_FILE,
-                '[' . date('Y-m-d H:i:s') . '] ' . $message . PHP_EOL,
-                FILE_APPEND
-            );
+            $file = __DIR__ . '/' . self::LOG_FILE;
+            $line = '[' . date('Y-m-d H:i:s') . '] ' . $message . PHP_EOL;
+
+            // 首次写入时加 PHP 守卫头，直接访问只会输出空白而不是日志内容
+            if (!is_file($file)) {
+                $line = "<?php exit; ?>\n" . $line;
+            }
+
+            @file_put_contents($file, $line, FILE_APPEND);
         } catch (\Throwable) {
         }
     }

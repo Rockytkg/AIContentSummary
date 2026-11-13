@@ -4,7 +4,7 @@ declare(strict_types=1);
 /**
  * AIContentSummary 连通性测试接口。
  * 独立文件不经 Typecho 路由（路由表存库，插件升级后旧路由不会自动清理），上传即可用；
- * 仅接受 POST，始终返回 JSON。
+ * 仅接受 POST，要求管理员登录态 + CSRF 令牌，始终返回 JSON。
  */
 
 @ini_set('display_errors', '0');
@@ -104,6 +104,25 @@ try {
         aics_respond(array('ok' => false, 'msg' => 'Typecho 自动加载失败（\Typecho\Db 不存在）', 'stage' => 'bootstrap'), 500);
     }
 
+    // 鉴权：仅限已登录管理员，且携带绑定当前页地址的 Typecho CSRF 令牌
+    if (!\Widget\User::alloc()->pass('administrator', true)) {
+        aics_respond(array(
+            'ok' => false,
+            'msg' => '需要管理员登录：请登录后台后在插件设置页操作',
+            'stage' => 'auth'
+        ), 403);
+    }
+
+    $request = \Typecho\Request::getInstance();
+    $referer = $request->getReferer();
+    if ($referer === null || !hash_equals(\Widget\Security::alloc()->getToken($referer), (string) ($_POST['_'] ?? ''))) {
+        aics_respond(array(
+            'ok' => false,
+            'msg' => '校验令牌不匹配：请重新打开插件设置页再点测试（页面刷新后会带上新令牌）',
+            'stage' => 'csrf'
+        ), 403);
+    }
+
     $db = \Typecho\Db::get();
     $row = $db->fetchRow(
         $db->select('value')->from('table.options')->where('name = ?', 'plugin:AIContentSummary')
@@ -126,7 +145,7 @@ try {
         aics_respond(array('ok' => false, 'msg' => '插件配置无法解析（不是合法的序列化数据）', 'stage' => 'config'));
     }
 
-    // 令牌由 API KEY 派生（sha1 前 24 位），外部无法猜测，避免接口被陌生请求占用额度
+    // 令牌由 API KEY 派生，外部无法猜测，避免接口被陌生请求占用额度
     $apiKey = trim(AIContentSummary_Api::opt($cfg, 'apiKey'));
     if ($apiKey === '') {
         aics_respond(array(
@@ -134,14 +153,6 @@ try {
             'msg' => 'API KEY 为空，请先在后台保存配置后再测试',
             'stage' => 'config'
         ));
-    }
-
-    if (!hash_equals(AIContentSummary_Api::token($apiKey), (string) ($_POST['t'] ?? ''))) {
-        aics_respond(array(
-            'ok' => false,
-            'msg' => '校验令牌不匹配：请重新打开插件设置页再点测试（页面刷新后会带上新令牌）',
-            'stage' => 'token'
-        ), 403);
     }
 
     $out = AIContentSummary_Api::runTest($cfg);

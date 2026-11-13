@@ -2,7 +2,7 @@
 
 一个用于 Typecho 的 AI 文章摘要插件：在文章发布后自动调用 AI 接口，根据正文生成摘要并保存为自定义字段，前台列表/摘要输出时优先展示该摘要；后台提供摘要管理面板，可逐条编辑、清空、生成。
 
-- **版本**：2.2.1（Typecho 1.3+ / PHP 8.0+ 全面重构；默认接入 DeepSeek）
+- **版本**：2.2.2（Typecho 1.3+ / PHP 8.0+；默认接入 DeepSeek，含一轮完整安全加固）
 - **兼容环境**：PHP 8.0 ~ 8.4、Typecho 1.3+
 
 > 项目说明与完整文档见仓库根目录的 [README.md](../README.md)。
@@ -35,7 +35,7 @@ AIContentSummary/
 
 | 界面名称 | 配置键 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| 模型名称 | `modelName` | `deepseek-chat` | 聊天补全接口使用的模型名 |
+| 模型名称 | `modelName` | `deepseek-flash` | 聊天补全接口使用的模型名 |
 | API Key | `apiKey` | 空 | 调用摘要接口的密钥，保存后以密码框掩码回显 |
 | API 地址 | `apiUrl` | `https://api.deepseek.com/v1` | 默认 DeepSeek，可替换任意 OpenAI 兼容地址，带不带 `/v1` 均可自动补全 |
 | 系统提示词 | `prompt` | 内置提示词 | 约束摘要风格与输出格式 |
@@ -49,11 +49,11 @@ AIContentSummary/
 
 | 服务 | API 地址 | 模型名 |
 | --- | --- | --- |
-| DeepSeek（默认） | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| DeepSeek（默认） | `https://api.deepseek.com/v1` | `deepseek-flash` |
 | Kimi | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 
-**摘要建议用非思考型模型**：摘要任务不需要推理，默认的 `deepseek-chat` 通常 1~3 秒返回、价格低；`kimi-k3` 这类思考型模型会先推理几千字，慢且贵（本版已做兼容，推理预算与兜底提取都到位）。
+**摘要建议用非思考型模型**：摘要任务不需要推理，默认的 `deepseek-flash` 响应快、价格低；`kimi-k3` 这类思考型模型会先推理几千字，慢且贵（本版已做兼容，推理预算与兜底提取都到位）。
 
 ## 使用方法
 
@@ -66,14 +66,14 @@ AIContentSummary/
 
 ## 排查问题
 
-插件目录下的 `debug.log` 会记录关键节点：
+插件目录下的 `debug.log.php` 会记录关键节点：
 
 ```
 [2025-01-01 10:20:01] 跳过生成：cid=128 已有摘要，不再调用接口
 [2025-01-01 10:21:12] 生成成功：cid=130 摘要长度=96
 ```
 
-> `debug.log` 直接部署在 Web 目录下，可能被公网访问到（内容为运行日志，不含密钥），排查完可以删除；插件目录中的 `test.php`、`regen.php` 由 API KEY 派生令牌保护，不校验后台登录。
+> 日志文件以 `<?php exit; ?>` 开头，直接访问只输出空白（内容为运行日志，不含密钥），排查完可删除；`test.php`、`regen.php` 要求管理员登录态 + Typecho CSRF 令牌，未登录请求一律 403。
 
 ## 开源协议
 

@@ -3,8 +3,8 @@ declare(strict_types=1);
 
 /**
  * AIContentSummary 补生成接口（独立文件，不经 Typecho 路由）。
- * 为没有摘要的历史文章补生成或手动重跑某一篇；仅接受 POST，始终返回 JSON。
- * 参数：t = 由 API KEY 派生的令牌（必填）；cid = 文章 id，不传则返回待补生成列表。
+ * 为没有摘要的历史文章补生成或手动重跑某一篇；仅接受 POST，要求管理员登录态 + CSRF 令牌，始终返回 JSON。
+ * 参数：cid = 文章 id，不传则返回待补生成列表。
  */
 
 @ini_set('display_errors', '0');
@@ -95,6 +95,25 @@ try {
         aics_regen_respond(array('ok' => false, 'msg' => 'Typecho 自动加载失败', 'stage' => 'bootstrap'), 500);
     }
 
+    // 鉴权：仅限已登录管理员，且携带绑定当前页地址的 Typecho CSRF 令牌
+    if (!\Widget\User::alloc()->pass('administrator', true)) {
+        aics_regen_respond(array(
+            'ok' => false,
+            'msg' => '需要管理员登录：请登录后台后在插件设置页操作',
+            'stage' => 'auth'
+        ), 403);
+    }
+
+    $request = \Typecho\Request::getInstance();
+    $referer = $request->getReferer();
+    if ($referer === null || !hash_equals(\Widget\Security::alloc()->getToken($referer), (string) ($_POST['_'] ?? ''))) {
+        aics_regen_respond(array(
+            'ok' => false,
+            'msg' => '校验令牌不匹配，请刷新插件设置页重试',
+            'stage' => 'csrf'
+        ), 403);
+    }
+
     $db = \Typecho\Db::get();
 
     $row = $db->fetchRow($db->select('value')->from('table.options')->where('name = ?', 'plugin:AIContentSummary'));
@@ -115,10 +134,6 @@ try {
     $apiKey = trim(AIContentSummary_Api::opt($cfg, 'apiKey'));
     if ($apiKey === '') {
         aics_regen_respond(array('ok' => false, 'msg' => 'API KEY 为空，请先在后台保存配置后再使用补生成', 'stage' => 'config'));
-    }
-
-    if (!hash_equals(AIContentSummary_Api::token($apiKey), (string) ($_POST['t'] ?? ''))) {
-        aics_regen_respond(array('ok' => false, 'msg' => '校验令牌不匹配，请刷新插件设置页重试', 'stage' => 'token'), 403);
     }
 
     $cid = (int) ($_POST['cid'] ?? 0);

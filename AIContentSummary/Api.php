@@ -10,9 +10,9 @@ if (!class_exists('AIContentSummary_Api')) {
     class AIContentSummary_Api
     {
         /** 版本号（与插件头保持一致） */
-        const VERSION = '2.2.1';
+        const VERSION = '2.2.2';
 
-        const DEFAULT_MODEL = 'deepseek-chat';
+        const DEFAULT_MODEL = 'deepseek-flash';
 
         /** 默认 API 地址（DeepSeek 官方 OpenAI 兼容接口，仅作为设置表单预填值） */
         const DEFAULT_API_URL = 'https://api.deepseek.com/v1';
@@ -134,6 +134,12 @@ if (!class_exists('AIContentSummary_Api')) {
                 return $fail;
             }
 
+            // 服务端请求限制为 http(s)，避免 file:// 等协议被当作接口地址
+            if (!self::isHttpUrl($apiUrl)) {
+                $fail['msg'] = 'API 地址必须以 http:// 或 https:// 开头';
+                return $fail;
+            }
+
             $plainText = self::prepareText($text, 8000);
             if ($plainText === '') {
                 $fail['msg'] = '文章内容为空，无法生成摘要';
@@ -230,11 +236,11 @@ if (!class_exists('AIContentSummary_Api')) {
         }
 
         /**
-         * 独立接口（test.php / regen.php）的校验令牌，由 API KEY 派生
+         * 是否为合法的 http(s) 地址（用于限制服务端请求的协议）
          */
-        public static function token(string $apiKey): string
+        public static function isHttpUrl(string $url): bool
         {
-            return substr(sha1('aicontentsummary|' . $apiKey), 0, 24);
+            return 1 === preg_match('#^https?://[^\s]+$#i', trim($url));
         }
 
         /**

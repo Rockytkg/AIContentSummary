@@ -262,17 +262,18 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
 <script>
 (function ($) {
     $(function () {
-        var actionUrl = <?php echo json_encode($actionBase, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-        var emptyText = <?php echo json_encode(_t('暂无摘要，点击此处编辑'), JSON_UNESCAPED_UNICODE); ?>;
-        var generatingText = <?php echo json_encode(_t('生成中...'), JSON_UNESCAPED_UNICODE); ?>;
-        var generateText = <?php echo json_encode(_t('生成摘要'), JSON_UNESCAPED_UNICODE); ?>;
-        var generateDoneText = <?php echo json_encode(_t('摘要生成成功'), JSON_UNESCAPED_UNICODE); ?>;
-        var generateFailText = <?php echo json_encode(_t('生成失败'), JSON_UNESCAPED_UNICODE); ?>;
-        var savedText = <?php echo json_encode(_t('摘要保存成功'), JSON_UNESCAPED_UNICODE); ?>;
-        var clearedText = <?php echo json_encode(_t('摘要已清空'), JSON_UNESCAPED_UNICODE); ?>;
-        var requestFailText = <?php echo json_encode(_t('请求失败'), JSON_UNESCAPED_UNICODE); ?>;
-        var batchDoneText = <?php echo json_encode(_t('批量生成完成'), JSON_UNESCAPED_UNICODE); ?>;
-        var batchEmptyText = <?php echo json_encode(_t('请至少选择一篇文章'), JSON_UNESCAPED_UNICODE); ?>;
+        // JSON_HEX_TAG 等标志避免字符串里的 </script> 提前闭合脚本块
+        var actionUrl = <?php echo json_encode($actionBase, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var emptyText = <?php echo json_encode(_t('暂无摘要，点击此处编辑'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var generatingText = <?php echo json_encode(_t('生成中...'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var generateText = <?php echo json_encode(_t('生成摘要'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var generateDoneText = <?php echo json_encode(_t('摘要生成成功'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var generateFailText = <?php echo json_encode(_t('生成失败'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var savedText = <?php echo json_encode(_t('摘要保存成功'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var clearedText = <?php echo json_encode(_t('摘要已清空'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var requestFailText = <?php echo json_encode(_t('请求失败'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var batchDoneText = <?php echo json_encode(_t('批量生成完成'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var batchEmptyText = <?php echo json_encode(_t('请至少选择一篇文章'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
         var currentNotice = null;
         var actionJoiner = actionUrl.indexOf('?') >= 0 ? '&' : '?';
         var $table = $('.typecho-list-table');

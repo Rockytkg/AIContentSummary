@@ -27,10 +27,14 @@ final class Action extends Base implements ActionInterface
 
         try {
             $this->user->pass('administrator');
-            $this->security->protect();
-
             if (!$this->request->isPost()) {
                 throw new Exception(_t('请求方式错误'), 405);
+            }
+
+            // 用 JSON 友好的校验替代 Security::protect()（后者失败时 HTML 跳转，AJAX 拿不到可读错误）
+            $token = (string) $this->request->get('_', '');
+            if ($token === '' || !hash_equals($this->security->getToken($this->request->getReferer()), $token)) {
+                throw new Exception(_t('表单令牌校验失败，请刷新页面重试'), 403);
             }
 
             $cid = (int) $this->request->filter('int')->get('cid');
@@ -39,7 +43,7 @@ final class Action extends Base implements ActionInterface
             }
 
             $summary = $this->request->get('summary', '');
-            $summary = is_string($summary) ? $summary : '';
+            $summary = is_string($summary) ? mb_substr($summary, 0, 10000, 'UTF-8') : '';
 
             // 复用插件主逻辑，与编辑页自动生成行为一致；保存与清空同一入口
             [$response['data'], $response['message']] = match ((string) $this->request->get('do')) {
@@ -52,9 +56,16 @@ final class Action extends Base implements ActionInterface
             };
         } catch (\Throwable $exception) {
             $status = (int) $exception->getCode();
+            $known = $exception instanceof Exception || $exception instanceof \RuntimeException;
+
+            // 非业务异常不回显内部信息（可能含 SQL、路径等），仅记日志
+            if (!$known) {
+                Plugin::log('后台动作异常：' . $exception->getMessage() . ' @ ' . basename($exception->getFile()) . ':' . $exception->getLine());
+            }
+
             $response = array(
                 'success' => false,
-                'message' => $exception->getMessage() !== '' ? $exception->getMessage() : _t('请求失败')
+                'message' => $known && $exception->getMessage() !== '' ? $exception->getMessage() : _t('请求失败')
             );
         }
 
@@ -66,6 +77,7 @@ final class Action extends Base implements ActionInterface
         $this->response
             ->setStatus($status)
             ->setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
+            ->setHeader('X-Content-Type-Options', 'nosniff')
             ->throwJson($response);
     }
 }
