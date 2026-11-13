@@ -1,20 +1,16 @@
 <?php
+declare(strict_types=1);
+
 /**
  * AIContentSummary 摘要管理面板
  *
  * 后台「摘要管理」页：列出文章与摘要，支持就地编辑 / 清空 / 单篇生成 / 批量生成。
+ * 字段名与摘要长度统一从 Api 读取，请求统一带 _t 时间戳规避缓存。
  *
- * 实现说明：
- *  - 字段名、摘要长度统一从 Api 读取（含合法性与默认值收敛）；
- *  - 分页与筛选参数收敛，避免 status/uid/keywords 组合漏传；
- *  - 请求统一带 _t 时间戳，规避 CDN / 浏览器缓存；
- *  - 批量生成逐条串行，失败只提示不中断。
- *
- * 版权与来源：基于 Rockytkg/AIContentSummary 修改，原项目版权归 Rockytkg 所有；
- * 修改者 Andrew8102，Apache-2.0。
+ * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）。
  *
  * @package AIContentSummary
- * @version 2.1.0
+ * @version 2.2.0
  */
 
 use Typecho\Common;
@@ -49,7 +45,6 @@ if (!in_array($currentStatus, array('all', 'waiting', 'draft'), true)) {
     $currentStatus = 'all';
 }
 
-// 统一组装当前面板链接，避免切换筛选条件时手写 query
 $buildPanelUrl = static function (array $query = array()) use ($options, $panelPath): string {
     $query = array_filter($query, static function ($value): bool {
         return $value !== null && $value !== '';
@@ -200,9 +195,10 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
                         <?php if ($posts->have()): ?>
                             <?php while ($posts->next()): ?>
                                 <?php
+                                // fields 是魔术属性，不能用 ?? 直接链式取值（__isset 恒为 false）
                                 $summary = '';
                                 try {
-                                    $summary = trim((string) ($posts->fields->{$fieldName} ?? ''));
+                                    $summary = trim((string) $posts->fields->{$fieldName});
                                 } catch (\Throwable $e) {
                                     $summary = '';
                                 }
@@ -278,14 +274,20 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
         var emptyText = <?php echo json_encode(_t('暂无摘要，点击此处编辑'), JSON_UNESCAPED_UNICODE); ?>;
         var generatingText = <?php echo json_encode(_t('生成中...'), JSON_UNESCAPED_UNICODE); ?>;
         var generateText = <?php echo json_encode(_t('生成摘要'), JSON_UNESCAPED_UNICODE); ?>;
+        var generateDoneText = <?php echo json_encode(_t('摘要生成成功'), JSON_UNESCAPED_UNICODE); ?>;
+        var generateFailText = <?php echo json_encode(_t('生成失败'), JSON_UNESCAPED_UNICODE); ?>;
+        var savedText = <?php echo json_encode(_t('摘要保存成功'), JSON_UNESCAPED_UNICODE); ?>;
+        var clearedText = <?php echo json_encode(_t('摘要已清空'), JSON_UNESCAPED_UNICODE); ?>;
         var requestFailText = <?php echo json_encode(_t('请求失败'), JSON_UNESCAPED_UNICODE); ?>;
+        var batchDoneText = <?php echo json_encode(_t('批量生成完成'), JSON_UNESCAPED_UNICODE); ?>;
+        var batchEmptyText = <?php echo json_encode(_t('请至少选择一篇文章'), JSON_UNESCAPED_UNICODE); ?>;
         var currentNotice = null;
         var actionJoiner = actionUrl.indexOf('?') >= 0 ? '&' : '?';
         var $table = $('.typecho-list-table');
         var $batchButton = $('.js-generate-summary-batch');
         var batchRunning = false;
 
-        // 只复用 Typecho 的选择能力，不接管动作链接，避免干扰当前页的自定义按钮事件
+        // 复用 Typecho 的表格选择能力，不接管动作链接
         $table.tableSelectable({
             checkEl: 'input[name="cid[]"]',
             rowEl: 'tbody tr[data-cid]',
@@ -339,7 +341,7 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
             var summary = $.trim(data && data.summary ? data.summary : '');
             var $cell = cellOf($row).removeClass('summary-editing');
 
-            // data-summary 保存“真实值”，取消编辑时不依赖展示文案反推内容
+            // data-summary 保存真实值，取消编辑时不依赖展示文案反推内容
             $cell.attr('data-summary', summary);
             $cell.find('.summary-display').text(summary || emptyText);
             resetEditor($cell);
@@ -420,7 +422,7 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
             runAction('save', $row, {
                 cid: $row.data('cid'),
                 summary: ''
-            }, '摘要已清空');
+            }, clearedText);
         });
 
         $table.find('.js-save-summary').on('click', function () {
@@ -429,17 +431,17 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
             runAction('save', $row, {
                 cid: $row.data('cid'),
                 summary: $row.find('textarea').val()
-            }, '摘要保存成功');
+            }, savedText);
         });
 
         $table.find('.js-generate-summary').on('click', function (event) {
             var $row = $(this).closest('tr[data-cid]');
 
             event.preventDefault();
-            runAction('generate', $row, {cid: $row.data('cid')}, '摘要生成成功');
+            runAction('generate', $row, {cid: $row.data('cid')}, generateDoneText);
         });
 
-        // 点击空白区域时关闭其它编辑器，保持单行编辑体验
+        // 点击空白区域关闭其它编辑器，保持单行编辑体验
         $(document).on('click', function (event) {
             if (!$(event.target).closest('.summary-cell').length) {
                 closeEditors();
@@ -452,23 +454,23 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
             if (index >= $rows.length) {
                 batchRunning = false;
                 $batchButton.removeClass('disabled');
-                notice('批量生成完成');
+                notice(batchDoneText);
                 return;
             }
 
             $row = $rows.eq(index);
             toggleBusy($row, true);
 
-            // 批量生成按顺序串行执行，减少接口并发带来的限流和提示混乱
+            // 批量生成按顺序串行执行，降低接口限流风险
             request('generate', {cid: $row.data('cid')}).done(function (response) {
                 if (response && response.success) {
                     syncRow($row, response.data || {});
                     return;
                 }
 
-                notice('文章 ' + $row.data('cid') + ' 生成失败：' + (response && response.message ? response.message : requestFailText), 'error');
+                notice('文章 ' + $row.data('cid') + ' ' + generateFailText + '：' + (response && response.message ? response.message : requestFailText), 'error');
             }).fail(function (xhr) {
-                notice('文章 ' + $row.data('cid') + ' 生成失败：' + failMessage(xhr), 'error');
+                notice('文章 ' + $row.data('cid') + ' ' + generateFailText + '：' + failMessage(xhr), 'error');
             }).always(function () {
                 toggleBusy($row, false);
                 runBatch($rows, index + 1);
@@ -484,7 +486,7 @@ $buildPanelUrl = static function (array $query = array()) use ($options, $panelP
             }
 
             if (!$rows.length) {
-                notice('请至少选择一篇文章', 'notice');
+                notice(batchEmptyText, 'notice');
                 return;
             }
 

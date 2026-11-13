@@ -15,9 +15,9 @@ AIContentSummary 是一个用于通过调用 AI 接口，根据文章内容生�
 
 ## 环境要求
 
-- Typecho >= 1.2，PHP 7.4 ~ 8.4（依赖 ext-curl 与 ext-mbstring）
+- Typecho >= 1.3，PHP 8.0 ~ 8.4（依赖 ext-curl 与 ext-mbstring）
 
-## 兼容性修复（2.1.0）
+## 兼容性修复（2.1.0 ~ 2.2.0）
 
 | 问题 | 现象 | 处理 |
 | --- | --- | --- |
@@ -26,6 +26,12 @@ AIContentSummary 是一个用于通过调用 AI 接口，根据文章内容生�
 | 保存文章白屏 | 后台空白页、无「已经发布」提示 | 发布钩子内不再调用 `fastcgi_finish_request()`，并整体包 try/catch，异常只写日志 |
 | 从不生成摘要 | 发布后一直没有摘要 | 不再用 `isset($obj->cid)` 判断 Typecho 魔术属性（恒为 false），改为直接取值 |
 | PHP 8.4 报错 | 除零、`array_key_exists(false)`、隐式可空参数等 | 已适配 PHP 8.x |
+| 启用插件即 500（2.1.1） | Typecho 1.2 下启用/设置页空白 | 设置表单误用了 Typecho 1.3 才有的 `Url` 表单元素，改回 `Text` |
+| 设置无法保存（2.1.1） | 保存时报错或提示「格式不正确」 | `regexp` / `min` 不是 Typecho\Validate 的合法规则，换成闭包校验 |
+| 面板摘要列恒为空（2.1.1） | 「摘要管理」所有文章都显示「暂无摘要」 | 面板模板错误地用 `??` 读取魔术属性，改为直接取值 |
+| 截断出现双省略号（2.1.1） | `……...` | `Common::subStr` 自带「...」后缀，去掉手动拼接 |
+| PHP 7.4 保存设置报错（2.1.1） | `Call to undefined function str_contains()` | 模板占位符校验改用 `strpos()`，兼容 7.4（2.2.0 起 PHP 底线提升至 8.0，改回 `str_contains`） |
+| 全面重构（2.2.0） | — | 仅支持 Typecho 1.3+ 与 PHP 8.0+：全文件 `strict_types`、全类型签名、`match`/`str_contains`/nullsafe 等 PHP 8 语法；`apiUrl` 改用 1.3 新增的 `Url` 元素、截断长度改用 `Number` 元素；摘要在单次请求内按 cid 缓存，避免列表页逐行查询 fields 表；独立接口增加 `nosniff` 并对空 API KEY 一律拒绝 |
 
 ## 安装
 

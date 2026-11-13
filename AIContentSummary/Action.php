@@ -1,24 +1,15 @@
 <?php
+declare(strict_types=1);
+
 /**
  * AIContentSummary 摘要管理动作
  *
- * 后台「摘要管理」面板的接口层：生成 / 保存 / 清空 / 批量生成。
- * 仅接受管理员 POST 请求，统一返回 JSON。
+ * 后台「摘要管理」面板的接口层：生成 / 保存 / 清空。仅接受管理员 POST，统一返回 JSON。
+ * 生成逻辑统一走 Api::generateSummary()，与发布钩子、独立接口行为一致。
  *
- * 相对上游 2.0 的改动：
- *  - PHP 8.4 兼容：match 分支不再依赖异常携带非标准 HTTP code，
- *    所有异常码统一收敛到 400~599，避免 response->setStatus() 抛错。
- *  - 批量生成改为按 cid 列表逐条调用，前端串行推进；单条失败不影响其余。
- *  - 生成逻辑统一走 Api::generateSummary()，与发布钩子/独立接口行为一致
- *    （思考型模型的 max_tokens 放大重试与 reasoning 兜底都在这里生效）。
+ * 环境要求：Typecho 1.3+，PHP 8.0+
  *
- * 版权与来源：基于 Rockytkg/AIContentSummary 修改，原项目版权归 Rockytkg 所有；
- * 修改者 Andrew8102，Apache-2.0。
- *
- * @package AIContentSummary
- * @author Rockytkg, Andrew8102
- * @version 2.1.0
- * @link https://github.com/Rockytkg/AIContentSummary
+ * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）。
  */
 
 namespace TypechoPlugin\AIContentSummary;
@@ -49,35 +40,23 @@ final class Action extends Base implements ActionInterface
                 throw new Exception(_t('请求方式错误'), 405);
             }
 
-            $do = (string) $this->request->get('do');
-
-            switch ($do) {
-                case 'generate':
-                    $cid = (int) $this->request->filter('int')->get('cid');
-                    if ($cid < 1) {
-                        throw new Exception(_t('无效的文章 ID'), 400);
-                    }
-                    $response['message'] = _t('摘要生成成功');
-                    // 统一复用插件主逻辑，保持编辑页自动生成与后台手动生成行为一致
-                    $response['data'] = Plugin::generateForPost($cid);
-                    break;
-
-                case 'save':
-                    $cid = (int) $this->request->filter('int')->get('cid');
-                    if ($cid < 1) {
-                        throw new Exception(_t('无效的文章 ID'), 400);
-                    }
-                    $summary = (string) $this->request->get('summary', '');
-                    $response['message'] = trim($summary) === ''
-                        ? _t('摘要已清空')
-                        : _t('摘要保存成功');
-                    // 保存与清空走同一入口，由插件主逻辑判断摘要内容是否为空
-                    $response['data'] = Plugin::saveManual($cid, $summary);
-                    break;
-
-                default:
-                    throw new Exception(_t('未知操作'), 400);
+            $cid = (int) $this->request->filter('int')->get('cid');
+            if ($cid < 1) {
+                throw new Exception(_t('无效的文章 ID'), 400);
             }
+
+            $summary = $this->request->get('summary', '');
+            $summary = is_string($summary) ? $summary : '';
+
+            // 复用插件主逻辑，与编辑页自动生成行为一致；保存与清空同一入口
+            [$response['data'], $response['message']] = match ((string) $this->request->get('do')) {
+                'generate' => array(Plugin::generateForPost($cid), _t('摘要生成成功')),
+                'save' => array(
+                    Plugin::saveManual($cid, $summary),
+                    trim($summary) === '' ? _t('摘要已清空') : _t('摘要保存成功')
+                ),
+                default => throw new Exception(_t('未知操作'), 400)
+            };
         } catch (\Throwable $exception) {
             $status = (int) $exception->getCode();
             $response = array(
@@ -86,8 +65,7 @@ final class Action extends Base implements ActionInterface
             );
         }
 
-        // 兜底修正异常码：Typecho 的 Exception 常带 404 之类的码，
-        // 但业务异常可能给 0 或非标准值，统一收敛到 4xx/5xx 区间。
+        // 兜底收敛状态码，避免传给 setStatus() 的值越出 4xx/5xx 区间
         if (!$response['success'] && ($status < 400 || $status >= 600)) {
             $status = 500;
         }

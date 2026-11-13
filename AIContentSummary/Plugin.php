@@ -1,27 +1,17 @@
 <?php
+declare(strict_types=1);
+
 /**
- * AIContentSummary 是一个用于通过调用 AI 接口，根据文章内容生成摘要的 Typecho 插件
+ * AIContentSummary：调用 AI 接口，依据文章正文生成摘要并写入自定义字段
+ *
+ * 环境要求：Typecho 1.3+，PHP 8.0+（ext-curl、ext-mbstring）
  *
  * @package AIContentSummary
  * @author Rockytkg, Andrew8102
- * @version 2.1.0
+ * @version 2.2.0
  * @link https://github.com/Rockytkg/AIContentSummary
- */
-
-/*
- * 版权与来源（Apache License 2.0）：
- * 本文件基于 Rockytkg/AIContentSummary，由 Andrew8102 修改（PHP 8.4 兼容、
- * Kimi K2/K3 等思考型模型的 temperature 与 max_tokens 适配、保存白屏与
- * 从不生成摘要的修复、摘要管理面板与正文前置摘要的整合）。
- * 修改部分同样以 Apache-2.0 发布。
  *
- * 实现备注（容易踩的 Typecho 细节）：
- *  - 插件头 docblock 只能放 parseInfo() 认识的元信息字段（@package/@author/@link/@since/@version），
- *    变更记录等长文本会被逐行拼进「插件描述」，必须写在普通块注释里。
- *  - 类声明必须写 implements 而非 extends：parseInfo() 靠 T_IMPLEMENTS 令牌判断
- *    activate/deactivate/config/personalConfig 是否存在，写成 extends 会被后台
- *    误判为「即插即用」，连「禁用」「设置」链接都不显示。
- *  - activate()/deactivate() 显式声明 : void 后，方法体绝不能 return 值。
+ * 版权与来源：原项目由 Rockytkg 开发，修改部分同样以 Apache License 2.0 发布。
  */
 
 namespace TypechoPlugin\AIContentSummary;
@@ -34,6 +24,7 @@ use Typecho\Plugin as TypechoPlugin;
 use Typecho\Plugin\Exception as PluginException;
 use Typecho\Plugin\PluginInterface;
 use Typecho\Widget\Helper\Form;
+use Typecho\Widget\Helper\Form\Element\Number;
 use Typecho\Widget\Helper\Form\Element\Password;
 use Typecho\Widget\Helper\Form\Element\Radio;
 use Typecho\Widget\Helper\Form\Element\Text;
@@ -49,30 +40,22 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
     exit;
 }
 
-// 公共 API 逻辑（纯 PHP，不依赖 Typecho 类），与发布钩子、后台动作、独立接口共用
 require_once __DIR__ . '/Api.php';
 
+/**
+ * 插件主体。
+ * 必须以 implements 实现 PluginInterface：Typecho 的 parseInfo() 依赖
+ * T_IMPLEMENTS 识别 activate/config 等入口，写成 extends 会被当作即插即用插件。
+ */
 final class Plugin implements PluginInterface
 {
-    /**
-     * 插件名（也是后台面板与配置的标识，勿改）
-     */
     public const NAME = 'AIContentSummary';
-
-    /**
-     * 后台面板模板（相对插件目录）
-     */
     public const PANEL = 'AIContentSummary/template/summaries.php';
-
-    /**
-     * 后台动作名
-     */
     public const ACTION = 'summaries';
-
-    /**
-     * 日志文件（位于插件目录）
-     */
     public const LOG_FILE = 'debug.log';
+
+    /** 摘要内容缓存（键为 cid，仅限单次请求内），避免 excerptEx/contentEx 高频触发时逐行查询 fields 表 */
+    private static array $summaryCache = [];
 
     /**
      * 注册前台渲染钩子、发布钩子、编辑页字段与后台管理入口。
@@ -93,7 +76,7 @@ final class Plugin implements PluginInterface
     }
 
     /**
-     * 卸载插件时移除后台面板与动作路由。
+     * 卸载插件时移除面板与动作。
      */
     public static function deactivate(): void
     {
@@ -102,7 +85,8 @@ final class Plugin implements PluginInterface
     }
 
     /**
-     * 构建插件配置表单。
+     * 构建配置表单，并输出设置页附加工具（连通性测试、历史文章补生成）。
+     * 校验规则只能使用 Typecho\Validate 已有方法或闭包，不存在的规则名会在保存设置时抛 TypeError。
      */
     public static function config(Form $form): void
     {
@@ -124,7 +108,7 @@ final class Plugin implements PluginInterface
                 null,
                 '',
                 _t('API Key'),
-                _t('用于调用摘要接口的密钥。')
+                _t('用于调用摘要接口的密钥，保存后以掩码回显。')
             )
         );
 
@@ -134,7 +118,8 @@ final class Plugin implements PluginInterface
                 null,
                 '',
                 _t('API 地址'),
-                _t('填写接口根地址，例如 https://api.example.com/v1，也支持直接填写 /chat/completions 完整地址。是否带 /v1 都可以，插件会自动补全。')
+                _t('填写接口根地址，例如 https://api.example.com/v1，也支持直接填写 /chat/completions 完整地址。'
+                    . '是否带 /v1 都可以，插件会自动补全。')
             ))->addRule('url', _t('请填写合法的 API 地址'))
         );
 
@@ -165,7 +150,10 @@ PROMPT,
                 _t('摘要保存在文章自定义字段中的字段名，仅支持字母、数字和下划线，且不能以数字开头。')
             ))
                 ->addRule('required', _t('摘要字段名不能为空'))
-                ->addRule('regexp', _t('摘要字段名格式不正确'), '/^[_a-zA-Z][_a-zA-Z0-9]*$/')
+                ->addRule(
+                    static fn(?string $value): bool => 1 === preg_match('/^[_a-zA-Z][_a-zA-Z0-9]*$/', (string) $value),
+                    _t('摘要字段名格式不正确')
+                )
         );
 
         $form->addInput(
@@ -174,23 +162,23 @@ PROMPT,
                 array('1' => _t('开启'), '0' => _t('关闭')),
                 '0',
                 _t('发布时自动生成'),
-                _t('开启后会在文章发布或更新时为没有摘要的文章自动生成摘要。<br>'
+                _t('开启后会在文章发布或更新时为没有摘要的文章自动生成摘要（仅管理员）。<br>'
                     . '<strong>已有摘要的文章不会重复调用接口</strong>（避免重复消耗额度、避免覆盖手工修订的摘要）；'
                     . '想让某篇重新生成，在「摘要管理」面板操作，或清空它的摘要字段再保存一次。')
             )
         );
 
         $form->addInput(
-            (new Text(
+            (new Number(
                 'summaryLength',
                 null,
-                '100',
+                100,
                 _t('摘要截断长度'),
                 _t('用于 excerptEx 输出时的最大字符数。')
             ))
                 ->addRule('required', _t('摘要截断长度不能为空'))
                 ->addRule('isInteger', _t('摘要截断长度必须为整数'))
-                ->addRule('min', _t('摘要截断长度不能小于 1'), 1)
+                ->addRule(static fn(?string $value): bool => (int) $value >= 1, _t('摘要截断长度不能小于 1'))
         );
 
         $form->addInput(
@@ -220,24 +208,24 @@ HTML,
                 )
         );
 
-        // ---------- 设置页附加工具：连通性测试 + 历史文章补生成 ----------
-        //
-        // 测试接口 = 插件目录下的独立文件（test.php / regen.php），不经过 Typecho 路由表。
-        // 只取 path，让浏览器以「当前后台页面同源」发起请求，规避 CORS / http-https 混用。
-        // 令牌由 API KEY 派生（外部猜不到），防止接口被陌生请求拿去刷额度。
-        $pluginUrl = Helper::options()->pluginUrl;
-        $testPath = Common::url(self::NAME . '/test.php', $pluginUrl);
-        $regenPath = Common::url(self::NAME . '/regen.php', $pluginUrl);
+        /*
+         * 设置页附加工具。
+         * test.php / regen.php 是不经 Typecho 路由的独立文件：只取 path，让浏览器以当前后台页面
+         * 同源发起请求，规避 CORS 与混合内容问题；令牌由 API KEY 派生（sha1 前 24 位），
+         * 防止接口被陌生请求占用额度。
+         */
+        $testPath = Common::url(self::NAME . '/test.php', Helper::options()->pluginUrl);
+        $regenPath = Common::url(self::NAME . '/regen.php', Helper::options()->pluginUrl);
 
         try {
-            $keyForToken = AIContentSummary_Api::opt(Options::alloc()->plugin(self::NAME), 'apiKey');
-        } catch (\Throwable $e) {
-            $keyForToken = '';
+            $apiKey = AIContentSummary_Api::opt(Options::alloc()->plugin(self::NAME), 'apiKey');
+        } catch (\Throwable) {
+            $apiKey = '';
         }
 
-        $testPathJson = json_encode(parse_url($testPath, PHP_URL_PATH) ?: '/usr/plugins/AIContentSummary/test.php', JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        $regenPathJson = json_encode(parse_url($regenPath, PHP_URL_PATH) ?: '/usr/plugins/AIContentSummary/regen.php', JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        $tokenJson = json_encode(AIContentSummary_Api::token($keyForToken));
+        $testPathJson = json_encode(parse_url($testPath, PHP_URL_PATH) ?: '/usr/plugins/' . self::NAME . '/test.php', JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $regenPathJson = json_encode(parse_url($regenPath, PHP_URL_PATH) ?: '/usr/plugins/' . self::NAME . '/regen.php', JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $tokenJson = json_encode(AIContentSummary_Api::token($apiKey));
 
         echo <<<HTML
 <div style="padding:12px 0;border-top:1px dashed #ddd;margin-top:15px;">
@@ -350,7 +338,6 @@ HTML,
         });
     });
 
-    // ---------- 补生成历史摘要 ----------
     var regenBtn = document.getElementById('ai-regen-btn');
     var regenStatus = document.getElementById('ai-regen-status');
     var regenLog = document.getElementById('ai-regen-log');
@@ -450,10 +437,7 @@ HTML;
     }
 
     /**
-     * 在摘要存在时优先输出摘要作为 excerpt。
-     *
-     * 注意：Config 继承 stdClass 但值存在内部数组里，用 isset() / ?? 判断
-     * 魔术属性永远是 false，所以这里必须直接取值并 try/catch 兜底。
+     * 存在 AI 摘要时优先输出摘要作为 excerpt。
      */
     public static function excerpt(string $excerpt, Contents $widget): string
     {
@@ -464,21 +448,20 @@ HTML;
 
         try {
             $maxLength = AIContentSummary_Api::maxLength(self::settings());
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             $maxLength = 100;
         }
 
+        // Common::subStr 截断时自带「...」后缀，不要重复拼接
         if (Common::strLen($summary) > $maxLength) {
-            $summary = Common::subStr($summary, 0, $maxLength) . '...';
+            $summary = Common::subStr($summary, 0, $maxLength);
         }
 
         return $summary;
     }
 
     /**
-     * 按配置将摘要插入正文顶部。
-     *
-     * 默认关闭，开启后才有行为变化，不影响现有主题的排版。
+     * 按配置把摘要插入正文顶部（默认关闭）。
      */
     public static function content(string $content, Contents $widget): string
     {
@@ -497,79 +480,73 @@ HTML;
             $template = AIContentSummary_Api::opt($settings, 'summaryTemplate', AIContentSummary_Api::DEFAULT_TEMPLATE);
 
             return AIContentSummary_Api::wrapSummary($template, $summary) . $content;
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return $content;
         }
     }
 
     /**
-     * 发布完成后按需生成摘要。
-     *
-     * 重要：这个钩子在 Typecho 里是「发布成功之后、跳转之前」调用的。
-     * 绝不能在这里调 fastcgi_finish_request() 或 session_write_close()，
-     * 否则后面的 Notice::set() 与 redirect() 发不出去，后台直接白屏。
+     * 发布完成后按需生成摘要。钩子在「发布成功之后、跳转之前」执行：
+     * 任何失败只能记日志、弹后台提示，阻塞或中断会让后台跳过
+     * Notice 与 redirect，表现为保存白屏。
      */
-    public static function finishPublish(array $contents, $editor): void
+    public static function finishPublish(array $contents, mixed $editor): void
     {
         try {
             $settings = self::settings();
 
-            // 与 main 2.0.0 一致：仅管理员发文时触发自动生成，避免非管理员发文意外消耗额度
             if (AIContentSummary_Api::opt($settings, 'finishPublishSummary', '0') !== '1' || !self::isAdministrator()) {
                 return;
             }
 
             $cid = self::resolveCid($editor, $contents);
-            $text = isset($contents['text']) ? (string) $contents['text'] : '';
+            $text = (string) ($contents['text'] ?? '');
 
             if ($cid <= 0) {
                 self::log('跳过生成：cid=0（未能从钩子参数取到 cid）');
-
                 return;
             }
 
             if (trim($text) === '') {
                 self::log('跳过生成：cid=' . $cid . ' 正文为空');
-
                 return;
             }
 
-            // 已有摘要直接跳过：既不重复消耗额度，也不覆盖手工改过的摘要
+            // 已有摘要直接跳过：不重复消耗额度，也不覆盖手工修订
             if (self::getSummary($cid) !== '') {
                 self::log('跳过生成：cid=' . $cid . ' 已有摘要，不再调用接口');
-
                 return;
             }
 
-            // 生成放在本次请求内同步完成，保证跳转前字段已落库
             @set_time_limit(120);
 
             $result = AIContentSummary_Api::generateSummary(
                 $settings,
-                isset($contents['title']) ? (string) $contents['title'] : '',
+                (string) ($contents['title'] ?? ''),
                 $text
             );
 
             if (!$result['ok']) {
-                self::log('生成失败：cid=' . $cid . ' ' . $result['msg'] . ' ' . $result['detail']);
-                self::notice('AI 摘要生成失败，可在「设置 → 插件 → AIContentSummary」点测试查看具体原因', 'error');
-
+                // 日志只记录结论；上游响应体可能包含任意文本（Notice 不转义），展示前先转义
+                self::log('生成失败：cid=' . $cid . ' ' . $result['msg']);
+                self::notice(
+                    'AI 摘要生成失败：' . $result['msg']
+                    . ($result['detail'] !== '' ? '（' . htmlspecialchars($result['detail'], ENT_QUOTES, 'UTF-8') . '）' : '')
+                    . '，可在「设置 → 插件 → AIContentSummary」点测试查看具体原因',
+                    'error'
+                );
                 return;
             }
 
             self::saveSummary($cid, $result['summary']);
             self::log('生成成功：cid=' . $cid . ' 摘要长度=' . Common::strLen($result['summary']));
         } catch (\Throwable $e) {
-            // 任何异常都只写日志，绝不让保存动作挂掉
             self::log('异常：' . $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine());
         }
     }
 
     /**
-     * 为管理员添加文章编辑页的「AI 摘要」字段。
-     *
-     * 注入的是默认自定义字段元素，最终会被 admin/custom-fields.php
-     * 包装成字段名 / 字段值两列布局。
+     * 为管理员添加文章编辑页的「AI 摘要」自定义字段。
      */
     public static function addField(Layout $layout): void
     {
@@ -579,7 +556,7 @@ HTML;
 
         try {
             $settings = self::settings();
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return;
         }
 
@@ -591,18 +568,16 @@ HTML;
             _t('手动填写后将优先作为文章摘要输出，同时跳过发布时的自动生成。')
         );
 
-        // 自定义字段区域会把 textarea 放进 field-value 列，这里只控制输入框尺寸
-        if (null !== $field->input) {
-            $field->input->setAttribute('class', 'w-100');
-        }
-
+        $field->input?->setAttribute('class', 'w-100');
         $layout->addItem($field);
     }
 
     /**
-     * 生成并保存摘要（后台单篇生成用）。
+     * 生成并保存摘要（后台单篇生成）。
      *
      * @return array{cid:int,summary:string,length:int,hasSummary:bool}
+     * @throws \RuntimeException 生成失败
+     * @throws \Typecho\Widget\Exception 文章不存在
      */
     public static function generateForPost(int $cid): array
     {
@@ -610,7 +585,7 @@ HTML;
         $result = AIContentSummary_Api::generateSummary(
             self::settings(),
             (string) $post['title'],
-            (string) $post['text']
+            (string) ($post['text'] ?? '')
         );
 
         if (!$result['ok']) {
@@ -626,22 +601,23 @@ HTML;
      * 手动保存或清空摘要。
      *
      * @return array{cid:int,summary:string,length:int,hasSummary:bool}
+     * @throws \Typecho\Widget\Exception 文章不存在
      */
     public static function saveManual(int $cid, string $summary): array
     {
-        // 先校验文章存在，避免为失效 cid 写入自定义字段
         self::post($cid);
 
         $summary = trim($summary);
 
         if ($summary === '') {
-            // 手动清空时直接删除字段，前台渲染可自然回退到默认摘要逻辑
+            // 清空即删除字段，前台渲染自然回退到默认摘要逻辑
             $db = Db::get();
             $db->query(
                 $db->delete('table.fields')
                     ->where('cid = ?', $cid)
                     ->where('name = ?', self::currentFieldName())
             );
+            unset(self::$summaryCache[$cid]);
 
             return self::summaryResponse($cid, '');
         }
@@ -671,21 +647,14 @@ HTML;
             );
         } catch (\Throwable $e) {
             self::log('读取已有摘要失败：cid=' . $cid . ' ' . $e->getMessage());
-
             return '';
         }
-
-        if (!$row) {
-            return '';
-        }
-
-        $row = (array) $row;
 
         return isset($row['str_value']) ? trim((string) $row['str_value']) : '';
     }
 
     /**
-     * 当前的摘要字段名（面板列名与接口共用）。
+     * 当前生效的摘要字段名（面板、接口与前台共用）。
      */
     public static function currentFieldName(): string
     {
@@ -693,42 +662,42 @@ HTML;
     }
 
     /**
-     * 取插件配置；未保存过配置时返回空对象而不是抛异常。
-     *
-     * @return object
+     * 读取插件配置；未保存过配置时返回空对象。
      */
-    public static function settings()
+    public static function settings(): object
     {
         try {
             $settings = Options::alloc()->plugin(self::NAME);
 
             return is_object($settings) ? $settings : new \stdClass();
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return new \stdClass();
         }
     }
 
     /**
-     * 写一行日志（失败静默，绝不因为日志影响主流程）。
+     * 写一行日志，失败静默。
      */
     public static function log(string $message): void
     {
         try {
-            $line = '[' . date('Y-m-d H:i:s') . '] ' . $message . PHP_EOL;
-            @file_put_contents(__DIR__ . '/' . self::LOG_FILE, $line, FILE_APPEND);
-        } catch (\Throwable $e) {
-            // 忽略
+            @file_put_contents(
+                __DIR__ . '/' . self::LOG_FILE,
+                '[' . date('Y-m-d H:i:s') . '] ' . $message . PHP_EOL,
+                FILE_APPEND
+            );
+        } catch (\Throwable) {
         }
     }
 
     /**
-     * 判断当前用户是否为管理员。
+     * 当前用户是否为管理员。
      */
     public static function isAdministrator(): bool
     {
         try {
-            return (bool) User::alloc()->pass('administrator', true);
-        } catch (\Throwable $e) {
+            return User::alloc()->pass('administrator', true);
+        } catch (\Throwable) {
             return false;
         }
     }
@@ -737,7 +706,7 @@ HTML;
      * 读取文章记录（仅允许正式文章与草稿）。
      *
      * @return array<string, mixed>
-     * @throws \Typecho\Widget\Exception
+     * @throws \Typecho\Widget\Exception 无效 ID 时 400，文章不存在时 404
      */
     public static function post(int $cid): array
     {
@@ -762,13 +731,9 @@ HTML;
     }
 
     /**
-     * 取文章 cid。
-     *
-     * 重点：Typecho 的 Widget 属性是魔术属性，且 **没有实现 __isset**，
-     * 所以 isset($obj->cid) 永远是 false —— 旧版本正是因为这一句，
-     * 每次都把 cid 判成 0 直接 return，摘要根本没生成过。
+     * 从钩子参数中取得 cid。Typecho 的 Widget 魔术属性没有实现 __isset，不能用 isset() 判断。
      */
-    private static function resolveCid($editor, array $contents): int
+    private static function resolveCid(mixed $editor, array $contents): int
     {
         if (isset($contents['cid']) && (int) $contents['cid'] > 0) {
             return (int) $contents['cid'];
@@ -780,12 +745,11 @@ HTML;
 
         foreach (array('cid', 'theId', 'id') as $prop) {
             try {
-                $value = (int) $editor->$prop;
+                $value = (int) $editor->{$prop};
                 if ($value > 0) {
                     return $value;
                 }
-            } catch (\Throwable $e) {
-                // 继续尝试下一个属性
+            } catch (\Throwable) {
             }
         }
 
@@ -793,23 +757,35 @@ HTML;
     }
 
     /**
-     * 从内容 Widget 上取当前文章的摘要。
+     * 从内容 Widget 上取当前文章的摘要（单次请求内按 cid 缓存）。
      */
     private static function postSummary(Contents $widget): string
     {
-        // Config 的魔术属性不能用 isset/?? 判断
         try {
-            $fields = $widget->fields;
-            $summary = is_object($fields) ? $fields->{self::currentFieldName()} : null;
-        } catch (\Throwable $e) {
-            $summary = null;
+            $cid = (int) $widget->cid;
+        } catch (\Throwable) {
+            return '';
         }
 
-        return is_string($summary) ? trim($summary) : '';
+        if (array_key_exists($cid, self::$summaryCache)) {
+            return self::$summaryCache[$cid];
+        }
+
+        try {
+            $fields = $widget->fields;
+            $value = is_object($fields) ? $fields->{self::currentFieldName()} : null;
+        } catch (\Throwable) {
+            $value = null;
+        }
+
+        $summary = is_string($value) ? trim($value) : '';
+        self::$summaryCache[$cid] = $summary;
+
+        return $summary;
     }
 
     /**
-     * 保存摘要字段（存在则更新，不存在则插入，保持幂等）。
+     * 保存摘要字段（存在则更新，不存在则插入）。
      */
     private static function saveSummary(int $cid, string $summary): void
     {
@@ -825,37 +801,31 @@ HTML;
                 ->limit(1)
         );
 
+        $rows = array(
+            'type' => 'str',
+            'str_value' => $summary,
+            'int_value' => 0,
+            'float_value' => 0
+        );
+
         if ($exists) {
-            // 编辑、重新生成时优先更新已有字段，避免产生重复 name/cid 记录
             $db->query(
                 $db->update('table.fields')
-                    ->rows(array(
-                        'type' => 'str',
-                        'str_value' => $summary,
-                        'int_value' => 0,
-                        'float_value' => 0
-                    ))
+                    ->rows($rows)
                     ->where('cid = ?', $cid)
                     ->where('name = ?', $fieldName)
             );
-
-            return;
+        } else {
+            $db->query(
+                $db->insert('table.fields')->rows(array('cid' => $cid, 'name' => $fieldName) + $rows)
+            );
         }
 
-        $db->query(
-            $db->insert('table.fields')->rows(array(
-                'cid' => $cid,
-                'name' => $fieldName,
-                'type' => 'str',
-                'str_value' => $summary,
-                'int_value' => 0,
-                'float_value' => 0
-            ))
-        );
+        self::$summaryCache[$cid] = $summary;
     }
 
     /**
-     * 组装面板/接口共用的返回结构。
+     * 面板/接口共用的返回结构。
      *
      * @return array{cid:int,summary:string,length:int,hasSummary:bool}
      */
@@ -878,8 +848,7 @@ HTML;
     {
         try {
             \Widget\Notice::alloc()->set($message, $type);
-        } catch (\Throwable $e) {
-            // 忽略
+        } catch (\Throwable) {
         }
     }
 }

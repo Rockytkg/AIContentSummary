@@ -1,21 +1,13 @@
 <?php
+declare(strict_types=1);
+
 /**
- * AIContentSummary 补生成接口（独立文件，不经过 Typecho 路由）
+ * AIContentSummary 补生成接口（独立文件，不经 Typecho 路由）
  *
- * 用途：给「历史文章」补生成摘要，或手动重跑某一篇。
- * 只接受 POST，始终返回 JSON。
+ * 为没有摘要的历史文章补生成，或手动重跑某一篇。仅接受 POST，始终返回 JSON。
+ * 参数：t = 由 API KEY 派生的令牌（必填）；cid = 指定文章 id，不传则返回待补生成列表。
  *
- * 参数：
- *   t    = 由 API KEY 派生的令牌（必填）
- *   cid  = 指定文章 id；不传则返回「缺少摘要的文章列表」
- *
- * 版权与来源：基于 Rockytkg/AIContentSummary 修改，原项目版权归 Rockytkg 所有；
- * 修改者 Andrew8102，Apache-2.0。
- *
- * @package AIContentSummary
- * @author Rockytkg, Andrew8102
- * @version 2.1.0
- * @link https://github.com/Rockytkg/AIContentSummary
+ * 版权与来源：原项目由 Rockytkg 开发（Apache-2.0）。
  */
 
 @ini_set('display_errors', '0');
@@ -25,6 +17,7 @@ error_reporting(E_ALL);
 if (!headers_sent()) {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('X-Content-Type-Options: nosniff');
     header('X-Robots-Tag: noindex, nofollow');
 }
 
@@ -32,15 +25,11 @@ $GLOBALS['__aics_done'] = false;
 
 /**
  * 输出 JSON 并结束
- *
- * @param array $data
- * @param int   $status
- * @return void
  */
-function aics_regen_respond(array $data, $status = 200)
+function aics_regen_respond(array $data, int $status = 200): void
 {
     $GLOBALS['__aics_done'] = true;
-    $data['httpStatus'] = (int) $status;
+    $data['httpStatus'] = $status;
 
     while (ob_get_level() > 0) {
         @ob_end_clean();
@@ -55,7 +44,8 @@ function aics_regen_respond(array $data, $status = 200)
     exit;
 }
 
-register_shutdown_function(function () {
+// 致命错误兜底：无论如何返回 JSON 而不是 HTML 错误页
+register_shutdown_function(function (): void {
     if (!empty($GLOBALS['__aics_done'])) {
         return;
     }
@@ -69,11 +59,11 @@ register_shutdown_function(function () {
         'ok' => false,
         'msg' => '接口内部错误：' . $err['message'],
         'stage' => 'bootstrap',
-        'line' => $err['line']
+        'line' => isset($err['line']) ? (int) $err['line'] : 0
     ), 500);
 });
 
-if (strtoupper(isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET') !== 'POST') {
+if (strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     aics_regen_respond(array('ok' => false, 'msg' => '该地址只接受 POST 请求', 'stage' => 'method'), 405);
 }
 
@@ -111,7 +101,7 @@ try {
     $db = \Typecho\Db::get();
 
     $row = $db->fetchRow($db->select('value')->from('table.options')->where('name = ?', 'plugin:AIContentSummary'));
-    $raw = is_array($row) && isset($row['value']) ? (string) $row['value'] : '';
+    $raw = is_array($row) ? (string) ($row['value'] ?? '') : '';
     if ($raw === '') {
         aics_regen_respond(array('ok' => false, 'msg' => '插件配置为空，请先在后台保存配置', 'stage' => 'config'));
     }
@@ -124,35 +114,27 @@ try {
         aics_regen_respond(array('ok' => false, 'msg' => '插件配置无法解析', 'stage' => 'config'));
     }
 
-    // 令牌校验
-    $apiKey = trim((string) AIContentSummary_Api::opt($cfg, 'apiKey'));
+    // 令牌由 API KEY 派生，外部无法猜测，避免接口被陌生请求占用额度
+    $apiKey = trim(AIContentSummary_Api::opt($cfg, 'apiKey'));
     if ($apiKey === '') {
         aics_regen_respond(array('ok' => false, 'msg' => 'API KEY 为空，请先在后台保存配置后再使用补生成', 'stage' => 'config'));
     }
-    $expect = AIContentSummary_Api::token($apiKey);
-    $given = isset($_POST['t']) ? (string) $_POST['t'] : '';
-    if (!hash_equals($expect, $given)) {
+
+    if (!hash_equals(AIContentSummary_Api::token($apiKey), (string) ($_POST['t'] ?? ''))) {
         aics_regen_respond(array('ok' => false, 'msg' => '校验令牌不匹配，请刷新插件设置页重试', 'stage' => 'token'), 403);
     }
 
-    $cid = isset($_POST['cid']) ? (int) $_POST['cid'] : 0;
-    // 摘要字段名（默认 content；上游 2.0 允许自定义，这里跟着配置走）
+    $cid = (int) ($_POST['cid'] ?? 0);
     $fieldName = AIContentSummary_Api::fieldName($cfg);
 
     // ---------- 1. 没传 cid：返回缺少摘要的文章列表 ----------
     if ($cid <= 0) {
-        // 已有「非空」摘要字段的 cid（字段存在但值为空的，视为还没有摘要，仍要补）
-        $hasRows = $db->fetchAll($db->select('cid', 'str_value')->from('table.fields')->where('name = ?', $fieldName));
+        // 字段存在但值为空的视为还没有摘要，仍需要补生成
         $has = array();
-        foreach ($hasRows as $r) {
-            if (!isset($r['cid'])) {
+        foreach ($db->fetchAll($db->select('cid', 'str_value')->from('table.fields')->where('name = ?', $fieldName)) as $r) {
+            if (trim((string) ($r['str_value'] ?? '')) === '') {
                 continue;
             }
-
-            if (trim((string) $r['str_value']) === '') {
-                continue;
-            }
-
             $has[(int) $r['cid']] = true;
         }
 
@@ -168,25 +150,15 @@ try {
         $list = array();
         foreach ($posts as $p) {
             $id = (int) $p['cid'];
-            if (isset($has[$id])) {
-                continue;
+            if (!isset($has[$id])) {
+                $list[] = array('cid' => $id, 'title' => (string) ($p['title'] ?? ''), 'created' => (int) ($p['created'] ?? 0));
             }
-            $list[] = array(
-                'cid' => $id,
-                'title' => (string) $p['title'],
-                'created' => (int) $p['created']
-            );
         }
 
-        aics_regen_respond(array(
-            'ok' => true,
-            'stage' => 'list',
-            'total' => count($list),
-            'list' => array_slice($list, 0, 50)
-        ));
+        aics_regen_respond(array('ok' => true, 'stage' => 'list', 'total' => count($list), 'list' => array_slice($list, 0, 50)));
     }
 
-    // ---------- 2. 传了 cid：生成并写入 ----------
+    // ---------- 2. 传了 cid：生成并写入（文章与草稿均允许重跑）----------
     $post = $db->fetchRow(
         $db->select('cid', 'title', 'text')
             ->from('table.contents')
@@ -199,10 +171,9 @@ try {
         aics_regen_respond(array('ok' => false, 'msg' => '文章不存在：cid=' . $cid, 'stage' => 'content'));
     }
 
-    $title = (string) $post['title'];
+    $title = (string) ($post['title'] ?? '');
 
-    // 生成逻辑统一走 Api::generateSummary()：截断放大重试与 reasoning 兜底都在那里
-    $result = AIContentSummary_Api::generateSummary($cfg, $title, isset($post['text']) ? $post['text'] : '', 60);
+    $result = AIContentSummary_Api::generateSummary($cfg, $title, (string) ($post['text'] ?? ''), 60);
 
     if (!$result['ok']) {
         aics_regen_respond(array(
@@ -215,7 +186,6 @@ try {
     }
 
     $summary = $result['summary'];
-    $cost = (int) $result['cost'];
 
     $exists = $db->fetchRow(
         $db->select('cid')->from('table.fields')->where('cid = ?', $cid)->where('name = ?', $fieldName)
@@ -247,7 +217,7 @@ try {
         'cid' => $cid,
         'title' => $title,
         'summary' => $summary,
-        'cost' => $cost . 'ms'
+        'cost' => $result['cost'] . 'ms'
     ));
 } catch (\Throwable $e) {
     aics_regen_respond(array(
