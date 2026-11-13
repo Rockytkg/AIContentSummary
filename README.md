@@ -5,6 +5,7 @@ AIContentSummary 是一个用于通过调用 AI 接口，根据文章内容生�
 ## 功能
 
 - 发布文章时自动调用 AI 生成摘要，写入文章自定义字段（默认 `ai_summary`）
+- 默认接入 DeepSeek（`deepseek-chat` + 官方 OpenAI 兼容接口），填写 API Key 即可使用，也可替换为任意 OpenAI 兼容服务
 - 后台「摘要管理」面板：查看全部文章摘要、就地编辑 / 清空 / 单篇生成 / 勾选批量生成（串行防限流）
 - 正文前置摘要（可选）：按模板把摘要渲染到正文顶部，`{summary}` 占位符 + HTML 转义
 - 自定义系统提示词、摘要字段名与截断长度
@@ -38,21 +39,23 @@ AIContentSummary 是一个用于通过调用 AI 接口，根据文章内容生�
 1. 从 [Releases](https://github.com/Rockytkg/AIContentSummary/releases) 下载插件压缩包
 2. 解压得到 `AIContentSummary/` 目录，**整个目录**上传到 `usr/plugins/`
 3. 后台 → 控制台 → 插件 → 启用 AIContentSummary
-4. 进入插件设置，填写模型名、API Key、API 地址，点「保存设置」后点「测试 API 连通性」
+4. 进入插件设置，填写 API Key（模型与 API 地址已预填 DeepSeek），点「保存设置」后点「测试 API 连通性」
 
 > **升级覆盖前**建议先停用插件；务必删除旧目录后再上传新版，避免残留旧文件。
 
 ### 配置示例
 
+默认已预填 DeepSeek（`deepseek-chat` + 官方接口），填好 API Key 即可使用；其他服务按需替换：
+
 | 服务 | API 地址 | 模型名 |
 | --- | --- | --- |
+| DeepSeek（默认） | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | Kimi | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 
 API 地址带不带 `/v1` 都可以，插件会自动补全。
 
-**建议用非思考型模型生成摘要**：摘要任务不需要推理，`deepseek-chat` 通常 1~3 秒返回；`kimi-k3` 这类思考型模型会先推理几千字，慢且贵（虽然插件已做兼容）。
+**摘要建议用非思考型模型**：摘要任务不需要推理，默认的 `deepseek-chat` 通常 1~3 秒返回、价格低；`kimi-k3` 这类思考型模型会先推理几千字，慢且贵（虽然插件已做兼容）。
 
 ## 使用方法
 

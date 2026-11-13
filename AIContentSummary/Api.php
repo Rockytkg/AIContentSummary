@@ -10,9 +10,12 @@ if (!class_exists('AIContentSummary_Api')) {
     class AIContentSummary_Api
     {
         /** 版本号（与插件头保持一致） */
-        const VERSION = '2.2.0';
+        const VERSION = '2.2.1';
 
-        const DEFAULT_MODEL = 'gpt-4o-mini';
+        const DEFAULT_MODEL = 'deepseek-chat';
+
+        /** 默认 API 地址（DeepSeek 官方 OpenAI 兼容接口，仅作为设置表单预填值） */
+        const DEFAULT_API_URL = 'https://api.deepseek.com/v1';
 
         /** 摘要字段名默认值（与插件设置表单一致） */
         const DEFAULT_FIELD = 'ai_summary';

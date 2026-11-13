@@ -2,7 +2,7 @@
 
 一个用于 Typecho 的 AI 文章摘要插件：在文章发布后自动调用 AI 接口，根据正文生成摘要并保存为自定义字段，前台列表/摘要输出时优先展示该摘要；后台提供摘要管理面板，可逐条编辑、清空、生成。
 
-- **版本**：2.2.0（Typecho 1.3+ / PHP 8.0+ 全面重构：strict_types、match、str_contains、nullsafe 等）
+- **版本**：2.2.1（Typecho 1.3+ / PHP 8.0+ 全面重构；默认接入 DeepSeek）
 - **兼容环境**：PHP 8.0 ~ 8.4、Typecho 1.3+
 
 > 项目说明与完整文档见仓库根目录的 [README.md](../README.md)。
@@ -27,7 +27,7 @@ AIContentSummary/
 
 1. 将整个 `AIContentSummary` 文件夹上传到 `usr/plugins/`；
 2. 后台 → 控制台 → 插件 → 启用 **AIContentSummary**;
-3. 设置 → 插件 → AIContentSummary，填写模型名、API Key、API 地址，保存后点「测试 API 连通性」。
+3. 设置 → 插件 → AIContentSummary，填写 API Key（模型与 API 地址已预填 DeepSeek），保存后点「测试 API 连通性」。
 
 > **升级覆盖前**建议先停用插件，删除旧目录后再上传新版。
 
@@ -35,9 +35,9 @@ AIContentSummary/
 
 | 界面名称 | 配置键 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| 模型名称 | `modelName` | `gpt-4o-mini` | 聊天补全接口使用的模型名 |
+| 模型名称 | `modelName` | `deepseek-chat` | 聊天补全接口使用的模型名 |
 | API Key | `apiKey` | 空 | 调用摘要接口的密钥，保存后以密码框掩码回显 |
-| API 地址 | `apiUrl` | 空 | 带不带 `/v1` 均可，插件自动补全 |
+| API 地址 | `apiUrl` | `https://api.deepseek.com/v1` | 默认 DeepSeek，可替换任意 OpenAI 兼容地址，带不带 `/v1` 均可自动补全 |
 | 系统提示词 | `prompt` | 内置提示词 | 约束摘要风格与输出格式 |
 | 摘要字段名 | `fieldName` | `ai_summary` | 摘要保存的自定义字段名 |
 | 发布时自动生成 | `finishPublishSummary` | `0` | 仅对没有摘要的文章生效 |
@@ -49,11 +49,11 @@ AIContentSummary/
 
 | 服务 | API 地址 | 模型名 |
 | --- | --- | --- |
+| DeepSeek（默认） | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | Kimi | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 
-**建议用非思考型模型生成摘要**：摘要任务不需要推理，`deepseek-chat` 通常 1~3 秒返回；`kimi-k3` 这类思考型模型会先推理几千字，慢且贵（本版已做兼容，推理预算与兜底提取都到位）。
+**摘要建议用非思考型模型**：摘要任务不需要推理，默认的 `deepseek-chat` 通常 1~3 秒返回、价格低；`kimi-k3` 这类思考型模型会先推理几千字，慢且贵（本版已做兼容，推理预算与兜底提取都到位）。
 
 ## 使用方法
 

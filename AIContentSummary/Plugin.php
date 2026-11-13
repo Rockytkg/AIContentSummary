@@ -6,7 +6,7 @@ declare(strict_types=1);
  *
  * @package AIContentSummary
  * @author Rockytkg, Andrew8102
- * @version 2.2.0
+ * @version 2.2.1
  * @link https://github.com/Rockytkg/AIContentSummary
  */
 
@@ -95,11 +95,12 @@ final class Plugin implements PluginInterface
             new Text(
                 'modelName',
                 null,
-                'gpt-4o-mini',
+                AIContentSummary_Api::DEFAULT_MODEL,
                 _t('模型名称'),
-                _t('聊天补全接口使用的模型名，例如 gpt-4o-mini。<br>'
+                _t('聊天补全接口使用的模型名，默认 deepseek-chat。<br>'
+                    . 'DeepSeek：deepseek-chat / deepseek-reasoner（用默认地址即可）；'
                     . 'Kimi / Moonshot：kimi-k3.1-pro、kimi-k3、kimi-k2.6（地址填 https://api.moonshot.cn/v1）；'
-                    . 'DeepSeek：deepseek-chat。Kimi 新模型只接受 temperature=1，插件已自动适配。')
+                    . 'OpenAI：gpt-4o-mini。思考型模型只接受 temperature=1，插件已自动适配。')
             )
         );
 
@@ -117,10 +118,10 @@ final class Plugin implements PluginInterface
             (new Url(
                 'apiUrl',
                 null,
-                '',
+                AIContentSummary_Api::DEFAULT_API_URL,
                 _t('API 地址'),
-                _t('填写接口根地址，例如 https://api.example.com/v1，也支持直接填写 /chat/completions 完整地址。'
-                    . '是否带 /v1 都可以，插件会自动补全。')
+                _t('默认为 DeepSeek 官方接口，可替换为任意 OpenAI 兼容地址，'
+                    . '也支持直接填写 /chat/completions 完整地址。是否带 /v1 都可以，插件会自动补全。')
             ))->addRule('url', _t('请填写合法的 API 地址'))
         );
 
